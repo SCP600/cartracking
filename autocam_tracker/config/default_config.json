@@ -1,0 +1,8 @@
+{
+  "model_path": "yolo26n.pt",
+  "conf": 0.15,
+  "imgsz": 960,
+  "camera_id": 0,
+  "tracker": "botsort_reid",
+  "crop_max_zoom": 2.5
+}

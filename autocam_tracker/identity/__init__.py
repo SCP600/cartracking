@@ -1,0 +1,2 @@
+"""Identity-ready target management."""
+
