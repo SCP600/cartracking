@@ -82,7 +82,21 @@ class AppController:
     def _tracker_config_path(self, tracker_name: str) -> Path:
         name = tracker_name.lower().strip()
         if name == "botsort_reid":
-            return self.project_root / "autocam_tracker" / "tracking" / "custom_botsort_reid.yaml"
+            base_config = self.project_root / "autocam_tracker" / "tracking" / "custom_botsort_reid.yaml"
+            if self.config.reid_model_path:
+                try:
+                    import yaml
+                    with open(base_config, "r", encoding="utf-8") as f:
+                        cfg = yaml.safe_load(f)
+                    cfg["model"] = str(self.config.reid_model_path)
+                    
+                    temp_config = self.project_root / "autocam_tracker" / "tracking" / ".dynamic_botsort_reid.yaml"
+                    with open(temp_config, "w", encoding="utf-8") as f:
+                        yaml.dump(cfg, f)
+                    return temp_config
+                except Exception as e:
+                    print(f"Warning: Failed to create dynamic tracker config: {e}")
+            return base_config
         if name == "bytetrack":
             return self.project_root / "autocam_tracker" / "tracking" / "custom_bytetrack.yaml"
         return self.project_root / "autocam_tracker" / "tracking" / "custom_botsort.yaml"

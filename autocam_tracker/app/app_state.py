@@ -7,6 +7,7 @@ from pathlib import Path
 @dataclass
 class AppConfig:
     model_path: Path
+    reid_model_path: Path | None = None
     conf: float = 0.15
     imgsz: int = 960
     camera_id: int = 0
