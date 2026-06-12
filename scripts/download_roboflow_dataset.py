@@ -7,11 +7,16 @@ def main():
     # 取得網址: https://universe.roboflow.com/yarok077-gmail-com/stanford_car-yaayi
     # 點擊 "Download Dataset" -> 選擇 YOLOv8 -> "Show Download Code" 即可看到
     # =========================================================================
-    API_KEY = "hlGHSyps1KVySgyXIL19"
+    import os
+    from dotenv import load_dotenv
     
-    if API_KEY == "YOUR_API_KEY":
-        print("[錯誤] 您尚未填寫 API_KEY！")
-        print("請打開 scripts/download_roboflow_dataset.py 檔案，將 API_KEY 替換為您的金鑰。")
+    load_dotenv()
+    API_KEY = os.environ.get("ROBOFLOW_API_KEY")
+    
+    if not API_KEY or API_KEY == "YOUR_API_KEY":
+        print("[錯誤] 您尚未設定 ROBOFLOW_API_KEY！")
+        print("請在專案根目錄建立一個 .env 檔案，內容為：")
+        print("ROBOFLOW_API_KEY=您的真實金鑰")
         sys.exit(1)
 
     print("[INFO] 開始連接 Roboflow 並下載資料集...")
