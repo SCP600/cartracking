@@ -11,6 +11,8 @@ recordings/
 assets/videos/
 *.pt
 dist/*.zip
+Stanford_Car-*/
+runs/
 
 .DS_Store
 Thumbs.db
