@@ -1,0 +1,13 @@
+# Candidate-building BoT-SORT config.
+tracker_type: botsort
+track_high_thresh: 0.12
+track_low_thresh: 0.04
+new_track_thresh: 0.12
+track_buffer: 180
+match_thresh: 0.65
+fuse_score: True
+gmc_method: sparseOptFlow
+proximity_thresh: 0.45
+appearance_thresh: 0.8
+with_reid: False
+model: auto

@@ -35,6 +35,7 @@ class MainWindow:
             on_stop=self.controller.stop,
             on_reset=self.controller.reset_target,
             on_source_preview=self._preview_source,
+            default_tracker=self.controller.config.tracker,
         )
         self.control_panel.pack(fill="x", padx=8, pady=8)
 

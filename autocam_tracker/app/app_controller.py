@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import queue
 import threading
@@ -16,7 +17,7 @@ from autocam_tracker.video.webcam_source import WebcamSource
 class AppController:
     def __init__(self, project_root: Path) -> None:
         self.project_root = project_root
-        self.config = AppConfig(model_path=project_root / "yolo26n.pt")
+        self.config = AppConfig.from_project_root(project_root)
         self.frame_queue: queue.Queue = queue.Queue(maxsize=self.config.max_queue_size)
         self.worker: Optional[PipelineWorker] = None
         self.stop_event: Optional[threading.Event] = None
@@ -41,6 +42,8 @@ class AppController:
             model_path=self.config.model_path,
             conf=self.config.conf,
             imgsz=self.config.imgsz,
+            vehicle_class_ids=self.config.vehicle_class_ids,
+            device=self.config.device,
         )
 
         self.stop_event = threading.Event()
@@ -85,14 +88,11 @@ class AppController:
             base_config = self.project_root / "autocam_tracker" / "tracking" / "custom_botsort_reid.yaml"
             if self.config.reid_model_path:
                 try:
-                    import yaml
-                    with open(base_config, "r", encoding="utf-8") as f:
-                        cfg = yaml.safe_load(f)
-                    cfg["model"] = str(self.config.reid_model_path)
+                    cfg = _load_simple_tracker_yaml(base_config)
+                    cfg["model"] = self.config.reid_model_path.as_posix()
                     
                     temp_config = self.project_root / "autocam_tracker" / "tracking" / ".dynamic_botsort_reid.yaml"
-                    with open(temp_config, "w", encoding="utf-8") as f:
-                        yaml.dump(cfg, f)
+                    _write_simple_tracker_yaml(temp_config, cfg)
                     return temp_config
                 except Exception as e:
                     print(f"Warning: Failed to create dynamic tracker config: {e}")
@@ -109,3 +109,49 @@ class AppController:
         if width < 16 or height < 16:
             raise ValueError("Screen region is too small.")
         return left, top, width, height
+
+
+def _load_simple_tracker_yaml(path: Path) -> dict[str, object]:
+    config: dict[str, object] = {}
+    with open(path, "r", encoding="utf-8") as file:
+        for line in file:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or ":" not in stripped:
+                continue
+            key, value = stripped.split(":", 1)
+            config[key.strip()] = _parse_simple_yaml_scalar(value.strip())
+    return config
+
+
+def _write_simple_tracker_yaml(path: Path, config: dict[str, object]) -> None:
+    with open(path, "w", encoding="utf-8") as file:
+        for key, value in config.items():
+            file.write(f"{key}: {_format_simple_yaml_scalar(value)}\n")
+
+
+def _parse_simple_yaml_scalar(value: str) -> object:
+    if value.lower() == "true":
+        return True
+    if value.lower() == "false":
+        return False
+    if value.lower() in ("null", "none"):
+        return None
+    try:
+        if "." in value:
+            return float(value)
+        return int(value)
+    except ValueError:
+        return value.strip("\"'")
+
+
+def _format_simple_yaml_scalar(value: object) -> str:
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if value is None:
+        return "null"
+    if isinstance(value, (int, float)):
+        return str(value)
+    text = str(value)
+    if text == "auto":
+        return text
+    return json.dumps(text)

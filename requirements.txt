@@ -4,3 +4,15 @@ numpy
 pillow
 lap
 mss
+python-dotenv
+roboflow
+onnx
+onnxruntime
+yacs
+termcolor
+tabulate
+tensorboard
+gdown
+scikit-learn
+prettytable
+easydict

@@ -14,12 +14,14 @@ class YOLO26Detector:
         model_path: Path,
         conf: float = 0.15,
         imgsz: int = 960,
-        vehicle_class_ids: Iterable[int] = (2, 3, 5, 7),
+        vehicle_class_ids: Iterable[int] | None = (2, 3, 5, 7),
+        device: int | str | None = None,
     ) -> None:
         self.model_path = Path(model_path)
         self.conf = conf
         self.imgsz = imgsz
-        self.vehicle_class_ids = list(vehicle_class_ids)
+        self.vehicle_class_ids = list(vehicle_class_ids) if vehicle_class_ids is not None else None
+        self.device = device
         self._model = None
 
     def track(
@@ -32,15 +34,19 @@ class YOLO26Detector:
         timestamp_ms: float,
     ) -> list[VehicleDetection]:
         model = self._get_model()
-        results = model.track(
-            frame,
-            persist=True,
-            tracker=str(tracker_config),
-            conf=self.conf,
-            imgsz=self.imgsz,
-            classes=self.vehicle_class_ids,
-            verbose=False,
-        )
+        track_options = {
+            "persist": True,
+            "tracker": str(tracker_config),
+            "conf": self.conf,
+            "imgsz": self.imgsz,
+            "verbose": False,
+        }
+        if self.vehicle_class_ids is not None:
+            track_options["classes"] = self.vehicle_class_ids
+        if self.device is not None:
+            track_options["device"] = self.device
+
+        results = model.track(frame, **track_options)
         if not results:
             return []
         return self._to_detections(
@@ -96,4 +102,3 @@ class YOLO26Detector:
                 )
             )
         return detections
-
