@@ -23,7 +23,7 @@
     - `learning_rate`: `0.00035`
     - `batch_size`: `256` （若未來 GPU 記憶體不足，將內建 Gradient Accumulation 邏輯來模擬此大小）
     - `epochs`: `10`
-  - **自動轉檔功能**：訓練結束後，腳本會自動將 FastReID 的權重匯出並轉換為 Ultralytics 支援的 `.pt` 或 `.onnx` 格式。
+  - **權重匯出規劃**：訓練結束後，需將 FastReID 權重匯出為 Ultralytics BoT-SORT 可讀取的 `.pt` 或 `.onnx` 格式，並填入 `reid_model_path`。
 
 - **新增檔案**：`scripts/train_yolo.py`
   - **應用最佳參數**：
@@ -36,11 +36,100 @@
 - **目標檔案**：`autocam_tracker/app/app_controller.py`
 - **修改內容**：更新 `AppConfig`，讓 Tracker 在初始化時，可動態吃入並套用客製化的 FastReID 權重路徑。
 
+## 目前實作進度 (Current Implementation)
+
+### 1. Roboflow 資料下載
+- **腳本**：`scripts/download_roboflow_dataset.py`
+- **用途**：從 Roboflow 下載 `stanford_car-yaayi` 的 YOLOv8 格式資料集，供 YOLO 偵測模型微調使用。
+- **執行前準備**：在專案根目錄建立 `.env`：
+```bash
+ROBOFLOW_API_KEY=您的真實金鑰
+```
+
+- **執行方式**：
+```bash
+python scripts/download_roboflow_dataset.py
+```
+
+如需切換 Roboflow workspace、project、version 或格式，可使用：
+```bash
+python scripts/download_roboflow_dataset.py --workspace yarok077-gmail-com --project stanford_car-yaayi --version 1 --format yolov8
+```
+
+### 2. YOLO 偵測模型微調
+- **腳本**：`scripts/train_yolo.py`
+- **用途**：使用 Roboflow 下載後的 `data.yaml` 微調車輛偵測模型。
+- **預設超參數**：
+  - `learning_rate`: `0.01`
+  - `batch_size`: `16`
+  - `epochs`: `20`
+
+先確認訓練設定：
+```bash
+python scripts/train_yolo.py --data path/to/data.yaml --dry-run
+```
+
+開始訓練：
+```bash
+python scripts/train_yolo.py --data path/to/data.yaml
+```
+
+訓練完成後，可將輸出的偵測權重填入 `autocam_tracker/config/default_config.json`：
+```json
+{
+  "model_path": "runs/train/yolo_vehicle_detector/weights/best.pt"
+}
+```
+
+### 3. FastReID 訓練入口
+- **腳本**：`scripts/train_fastreid.py`
+- **用途**：檢查 ReID 資料夾、統計身份與影像數、寫出 `training_plan.json`，並在提供 FastReID repo 與 config 後接上正式訓練。
+- **預設超參數**：
+  - `learning_rate`: `0.00035`
+  - `batch_size`: `256`
+  - `epochs`: `10`
+
+目前預期的簡易 ReID 資料夾格式：
+```text
+datasets/vehicle_reid/
+  car_001/
+    image_001.jpg
+    image_002.jpg
+  car_002/
+    image_001.jpg
+```
+
+先檢查資料與寫出訓練計畫：
+```bash
+python scripts/train_fastreid.py --dry-run
+```
+
+若已準備 FastReID repo 與正式 config：
+```bash
+python scripts/train_fastreid.py --run --fastreid-root path/to/fast-reid --config-file path/to/vehicle_reid_config.yaml
+```
+
+> 注意：Roboflow 的 YOLO detection dataset 主要提供車輛框選與類別標籤，不能直接等同於 ReID 訓練資料。FastReID 需要同一車輛身份的標籤，否則模型無法學到「同一台車」的外觀特徵。
+
+### 4. App 端套用自訂 ReID 權重
+- **設定檔**：`autocam_tracker/config/default_config.json`
+- **Runtime 行為**：當 `tracker` 為 `botsort_reid` 且 `reid_model_path` 有值時，`AppController` 會動態產生 `.dynamic_botsort_reid.yaml`，把 BoT-SORT ReID 的 `model` 指向自訂權重。
+
+範例：
+```json
+{
+  "model_path": "yolo26n.pt",
+  "reid_model_path": "weights/fastreid_finetuned/best.onnx",
+  "tracker": "botsort_reid"
+}
+```
+
 ## 驗證計畫 (Verification Plan)
 
 ### 自動化測試 (Automated Tests)
-- 單元測試：模擬權重轉檔後的載入過程，確保 `YOLO26Detector` 能正確解析自訂的 ReID 模型檔案而不崩潰。
-- 腳本測試：確保 `train_fastreid.py` 的預設參數（LR、Batch Size）皆正確鎖定在論文推薦值。
+- 單元測試：模擬權重轉檔後的載入過程，確保 `AppController` 能正確產生自訂 ReID tracker config。
+- 腳本測試：確保 `train_fastreid.py` 與 `train_yolo.py` 的預設參數皆正確鎖定在論文推薦值。
+- 資料檢查測試：確保 `train_fastreid.py` 能統計 ReID 資料夾內的身份數與影像數。
 
 ### 人工驗證 (Manual Verification)
 - 當獲得資料集後，實際跑一次 `train_fastreid.py`，確認 Loss 值能在 10 個 Epoch 內收斂。

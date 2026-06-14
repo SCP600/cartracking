@@ -1,15 +1,31 @@
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
 import numpy as np
+import torch
 
+from autocam_tracker.app.app_state import AppConfig
 from autocam_tracker.app.app_controller import AppController
 from autocam_tracker.data.recognized_vehicle_registry import RecognizedVehicleRegistry
 from autocam_tracker.detection.detection_models import VehicleDetection
+from autocam_tracker.detection.yolo26_detector import YOLO26Detector
 from autocam_tracker.framing.crop_controller import CropController
 from autocam_tracker.identity.global_identity_manager import GlobalIdentityManager
+from scripts import (
+    auto_curate_vehicle_identity_tracks,
+    build_vehicle_identity_candidates,
+    curate_vehicle_identity_dataset,
+    export_fastreid_reid_onnx,
+    prepare_fastreid_veri_dataset,
+    prepare_reid_dataset_from_yolo,
+    prepare_yolo_dataset_from_identity_crops,
+    train_fastreid,
+    train_yolo,
+)
 
 
 class CoreSmokeTest(unittest.TestCase):
@@ -111,6 +127,321 @@ class CoreSmokeTest(unittest.TestCase):
         self.assertEqual(len(summaries), 1)
         self.assertEqual(summaries[0].registry_id, "R1")
         self.assertEqual(summaries[0].local_track_aliases, [35, 41])
+
+    def test_app_config_loads_reid_model_path_from_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            config_dir = project_root / "autocam_tracker" / "config"
+            config_dir.mkdir(parents=True)
+            config_path = config_dir / "default_config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "model_path": "models/yolo_vehicle.pt",
+                        "reid_model_path": "weights/fastreid_vehicle.onnx",
+                        "vehicle_class_ids": None,
+                        "tracker": "botsort_reid",
+                        "conf": 0.2,
+                        "imgsz": 640,
+                        "device": 0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config = AppConfig.from_project_root(project_root)
+
+            self.assertEqual(config.model_path, project_root / "models" / "yolo_vehicle.pt")
+            self.assertEqual(config.reid_model_path, project_root / "weights" / "fastreid_vehicle.onnx")
+            self.assertIsNone(config.vehicle_class_ids)
+            self.assertEqual(config.tracker, "botsort_reid")
+            self.assertEqual(config.conf, 0.2)
+            self.assertEqual(config.imgsz, 640)
+            self.assertEqual(config.device, 0)
+
+    def test_detector_omits_class_filter_for_custom_vehicle_model(self) -> None:
+        class FakeModel:
+            def __init__(self) -> None:
+                self.kwargs = {}
+
+            def track(self, frame, **kwargs):
+                self.kwargs = kwargs
+                return []
+
+        fake_model = FakeModel()
+        detector = YOLO26Detector(
+            model_path=Path("custom_vehicle.pt"),
+            vehicle_class_ids=None,
+            device=0,
+        )
+        detector._model = fake_model
+
+        detections = detector.track(
+            frame=np.zeros((32, 32, 3), dtype=np.uint8),
+            tracker_config=Path("tracker.yaml"),
+            camera_id=0,
+            shot_id=0,
+            frame_index=0,
+            timestamp_ms=0.0,
+        )
+
+        self.assertEqual(detections, [])
+        self.assertNotIn("classes", fake_model.kwargs)
+        self.assertEqual(fake_model.kwargs["device"], 0)
+
+    def test_dynamic_botsort_reid_config_uses_custom_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            tracking_dir = project_root / "autocam_tracker" / "tracking"
+            tracking_dir.mkdir(parents=True)
+            (tracking_dir / "custom_botsort_reid.yaml").write_text(
+                "tracker_type: botsort\nwith_reid: true\nmodel: auto\n",
+                encoding="utf-8",
+            )
+            controller = AppController(project_root=project_root)
+            controller.config.reid_model_path = project_root / "weights" / "fastreid_vehicle.onnx"
+
+            tracker_config = controller._tracker_config_path("botsort_reid")
+
+            self.assertEqual(tracker_config, tracking_dir / ".dynamic_botsort_reid.yaml")
+            self.assertIn(controller.config.reid_model_path.as_posix(), tracker_config.read_text(encoding="utf-8"))
+
+    def test_training_script_defaults_match_optimization_plan(self) -> None:
+        fastreid_args = train_fastreid.build_parser().parse_args([])
+        yolo_args = train_yolo.build_parser().parse_args([])
+
+        self.assertEqual(fastreid_args.lr, 0.00035)
+        self.assertEqual(fastreid_args.batch_size, 256)
+        self.assertEqual(fastreid_args.epochs, 10)
+        self.assertEqual(yolo_args.lr, 0.01)
+        self.assertEqual(yolo_args.batch_size, 16)
+        self.assertEqual(yolo_args.epochs, 20)
+        self.assertEqual(yolo_args.optimizer, "SGD")
+
+    def test_fastreid_dataset_inspection_counts_identities_and_images(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            (data_dir / "car_001").mkdir()
+            (data_dir / "car_002").mkdir()
+            (data_dir / "empty_identity").mkdir()
+            (data_dir / "car_001" / "a.jpg").write_bytes(b"fake")
+            (data_dir / "car_001" / "b.png").write_bytes(b"fake")
+            (data_dir / "car_002" / "c.jpeg").write_bytes(b"fake")
+
+            identity_count, image_count = train_fastreid.inspect_reid_dataset(data_dir)
+
+            self.assertEqual(identity_count, 2)
+            self.assertEqual(image_count, 3)
+
+    def test_prepare_reid_dataset_from_yolo_writes_class_identity_crops(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image_dir = root / "train" / "images"
+            label_dir = root / "train" / "labels"
+            output_dir = root / "datasets" / "vehicle_reid_bootstrap"
+            image_dir.mkdir(parents=True)
+            label_dir.mkdir(parents=True)
+
+            image = np.zeros((100, 120, 3), dtype=np.uint8)
+            image[25:75, 30:90] = (255, 255, 255)
+            image_path = image_dir / "car_001.jpg"
+            import cv2
+
+            cv2.imwrite(str(image_path), image)
+            (label_dir / "car_001.txt").write_text("0 0.5 0.5 0.5 0.5\n", encoding="utf-8")
+            data_yaml = root / "data.yaml"
+            data_yaml.write_text(
+                "names:\n- Demo Vehicle\nnc: 1\ntrain: train/images\n",
+                encoding="utf-8",
+            )
+
+            summary = prepare_reid_dataset_from_yolo.prepare_reid_dataset_from_yolo(
+                data_yaml=data_yaml,
+                output_dir=output_dir,
+                splits=["train"],
+                min_box_size=8,
+            )
+
+            crop_path = output_dir / "train" / "000_Demo_Vehicle" / "car_001_00.jpg"
+            self.assertEqual(summary.identity_count, 1)
+            self.assertEqual(summary.crop_count, 1)
+            self.assertTrue(crop_path.exists())
+            self.assertTrue((output_dir / "manifest.csv").exists())
+
+    def test_prepare_fastreid_veri_dataset_exports_expected_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_dir = root / "datasets" / "vehicle_reid_bootstrap"
+            output_dir = root / "datasets" / "fastreid" / "veri"
+            for split in ("train", "val"):
+                identity_dir = source_dir / split / "000_Demo_Vehicle"
+                identity_dir.mkdir(parents=True)
+                (identity_dir / f"{split}_001.jpg").write_bytes(b"fake")
+                (identity_dir / f"{split}_002.jpg").write_bytes(b"fake")
+
+            summary = prepare_fastreid_veri_dataset.export_identity_folders_to_veri(
+                source_dir=source_dir,
+                output_dir=output_dir,
+            )
+
+            self.assertEqual(summary.identity_count, 1)
+            self.assertEqual(summary.train_count, 2)
+            self.assertEqual(summary.query_count, 1)
+            self.assertEqual(summary.gallery_count, 1)
+            self.assertTrue((output_dir / "image_train" / "0001_c001_000001.jpg").exists())
+            self.assertTrue((output_dir / "image_query" / "0001_c001_000001.jpg").exists())
+            self.assertTrue((output_dir / "image_test" / "0001_c002_000001.jpg").exists())
+
+    def test_build_vehicle_identity_candidates_writes_track_crops(self) -> None:
+        class FakeDetector:
+            def reset_tracking(self) -> None:
+                pass
+
+            def track(self, frame, tracker_config, camera_id, shot_id, frame_index, timestamp_ms):
+                return [
+                    VehicleDetection(
+                        detection_id=0,
+                        local_track_id=3,
+                        frame_index=frame_index,
+                        timestamp_ms=timestamp_ms,
+                        label="demo_car",
+                        confidence=0.91,
+                        bbox=(10, 12, 28, 24),
+                        center=(24, 24),
+                    )
+                ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_dir = root / "frames"
+            output_dir = root / "datasets" / "vehicle_identity_candidates"
+            source_dir.mkdir()
+            import cv2
+
+            for index in range(2):
+                image = np.zeros((80, 100, 3), dtype=np.uint8)
+                image[12:36, 10:38] = (255, 255, 255)
+                cv2.imwrite(str(source_dir / f"frame_{index:03d}.jpg"), image)
+
+            summary = build_vehicle_identity_candidates.build_vehicle_identity_candidates(
+                sources=[source_dir],
+                output_dir=output_dir,
+                model_path=Path("fake.pt"),
+                tracker_config=Path("tracker.yaml"),
+                detector=FakeDetector(),
+                frame_stride=1,
+                min_box_size=8,
+                min_crops_per_track=1,
+            )
+
+            track_dir = output_dir / "cam_000_frames" / "track_0003"
+            self.assertEqual(summary.crop_count, 2)
+            self.assertEqual(summary.kept_track_count, 1)
+            self.assertEqual(len(list(track_dir.glob("*.jpg"))), 2)
+            self.assertTrue((output_dir / "manifest.csv").exists())
+            self.assertTrue((output_dir / "track_summary.csv").exists())
+            self.assertTrue((output_dir / "dataset_summary.json").exists())
+
+    def test_curate_vehicle_identity_dataset_applies_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            candidates_dir = root / "datasets" / "vehicle_identity_candidates"
+            track_dir = candidates_dir / "cam_000_main" / "track_0007"
+            output_dir = root / "datasets" / "vehicle_identity"
+            track_dir.mkdir(parents=True)
+            (track_dir / "frame_000001.jpg").write_bytes(b"fake")
+            (candidates_dir / "track_summary.csv").write_text(
+                "camera_name,track_id,crop_count,first_frame_index,last_frame_index,mean_confidence,label,representative_crop,keep\n"
+                "cam_000_main,7,1,1,1,0.95,demo,frame_000001.jpg,True\n",
+                encoding="utf-8",
+            )
+            mapping_csv = candidates_dir / "identity_mapping_template.csv"
+
+            row_count = curate_vehicle_identity_dataset.init_identity_mapping(candidates_dir, mapping_csv)
+            self.assertEqual(row_count, 1)
+
+            mapping_csv.write_text(
+                "include,identity_id,split,camera_name,track_id,crop_count,first_frame_index,last_frame_index,mean_confidence,representative_crop,note\n"
+                "1,vehicle_0001,train,cam_000_main,7,1,1,1,0.95,frame_000001.jpg,\n",
+                encoding="utf-8",
+            )
+            summary = curate_vehicle_identity_dataset.curate_identity_dataset(
+                candidates_dir=candidates_dir,
+                mapping_csv=mapping_csv,
+                output_dir=output_dir,
+            )
+
+            self.assertEqual(summary.identity_count, 1)
+            self.assertEqual(summary.crop_count, 1)
+            self.assertTrue((output_dir / "train" / "vehicle_0001" / "cam_000_main_track_0007_00001.jpg").exists())
+            self.assertTrue((output_dir / "manifest.csv").exists())
+
+    def test_auto_curate_vehicle_identity_tracks_selects_stable_tracks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            candidates_root = root / "datasets" / "vehicle_identity_candidates_batch"
+            segment_dir = candidates_root / "seg_000000_000060"
+            track_dir = segment_dir / "cam_000_video" / "track_0003"
+            short_track_dir = segment_dir / "cam_000_video" / "track_0004"
+            output_dir = root / "datasets" / "vehicle_identity_auto"
+            track_dir.mkdir(parents=True)
+            short_track_dir.mkdir(parents=True)
+            for index in range(6):
+                (track_dir / f"frame_{index:06d}.jpg").write_bytes(b"fake")
+            (short_track_dir / "frame_000000.jpg").write_bytes(b"fake")
+            (segment_dir / "track_summary.csv").write_text(
+                "camera_name,track_id,crop_count,first_frame_index,last_frame_index,mean_confidence,label,representative_crop,keep\n"
+                f"cam_000_video,3,6,0,5,0.60,vehicle,{track_dir / 'frame_000000.jpg'},True\n"
+                f"cam_000_video,4,1,0,0,0.90,vehicle,{short_track_dir / 'frame_000000.jpg'},True\n",
+                encoding="utf-8",
+            )
+
+            summary = auto_curate_vehicle_identity_tracks.auto_curate_vehicle_identity_tracks(
+                candidates_root=candidates_root,
+                output_dir=output_dir,
+                min_crops=5,
+                min_mean_confidence=0.45,
+                max_crops_per_identity=6,
+                val_ratio=0.33,
+            )
+
+            self.assertEqual(summary.identity_count, 1)
+            self.assertEqual(summary.train_count, 4)
+            self.assertEqual(summary.val_count, 2)
+            self.assertEqual(len(list((output_dir / "train" / "vehicle_0001").glob("*.jpg"))), 4)
+            self.assertEqual(len(list((output_dir / "val" / "vehicle_0001").glob("*.jpg"))), 2)
+
+    def test_prepare_yolo_dataset_from_identity_crops_writes_full_box_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_dir = root / "datasets" / "vehicle_identity"
+            output_dir = root / "datasets" / "yolo_vehicle"
+            for split in ("train", "val"):
+                identity_dir = source_dir / split / "vehicle_0001"
+                identity_dir.mkdir(parents=True)
+                (identity_dir / f"{split}_001.jpg").write_bytes(b"fake")
+
+            summary = prepare_yolo_dataset_from_identity_crops.prepare_yolo_dataset_from_identity_crops(
+                source_dir=source_dir,
+                output_dir=output_dir,
+            )
+
+            self.assertEqual(summary.train_count, 1)
+            self.assertEqual(summary.val_count, 1)
+            self.assertTrue((output_dir / "data.yaml").exists())
+            label_path = output_dir / "train" / "labels" / "vehicle_0001_train_001.txt"
+            self.assertEqual(label_path.read_text(encoding="utf-8").strip(), "0 0.5 0.5 1.0 1.0")
+
+    def test_fastreid_onnx_wrapper_scales_and_normalizes_embeddings(self) -> None:
+        class FakeReID(torch.nn.Module):
+            def forward(self, images):
+                return torch.stack((images.mean(dim=(1, 2, 3)), torch.ones(images.shape[0])), dim=1)
+
+        wrapper = export_fastreid_reid_onnx.UltralyticsReIDWrapper(FakeReID())
+        output = wrapper(torch.ones(2, 3, 4, 4))
+
+        self.assertEqual(tuple(output.shape), (2, 2))
+        np.testing.assert_allclose(output.norm(dim=1).detach().numpy(), np.ones(2), rtol=1e-5)
 
 
 if __name__ == "__main__":

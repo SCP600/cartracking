@@ -9,7 +9,7 @@ from autocam_tracker.ui.screen_region_selector import ScreenRegionSelector
 
 
 class ControlPanel(ttk.Frame):
-    def __init__(self, master, on_start, on_stop, on_reset, on_source_preview=None) -> None:
+    def __init__(self, master, on_start, on_stop, on_reset, on_source_preview=None, default_tracker: str = "botsort_reid") -> None:
         super().__init__(master)
         self.on_start = on_start
         self.on_stop = on_stop
@@ -17,7 +17,7 @@ class ControlPanel(ttk.Frame):
         self.on_source_preview = on_source_preview
         self.source = SourceConfig(kind="webcam", value="0")
         self.source_text = tk.StringVar(value="Webcam 0")
-        self.tracker = tk.StringVar(value="botsort_reid")
+        self.tracker = tk.StringVar(value=default_tracker)
         self._build()
 
     def _build(self) -> None:

@@ -1,7 +1,10 @@
 {
-  "model_path": "yolo26n.pt",
+  "model_path": "runs/train/yolo_vehicle_detector_gpu_640/weights/best.pt",
+  "reid_model_path": "weights/fastreid_videoplayback_auto/fastreid_vehicle_reid.torchscript",
+  "vehicle_class_ids": null,
   "conf": 0.15,
-  "imgsz": 960,
+  "imgsz": 640,
+  "device": 0,
   "camera_id": 0,
   "tracker": "botsort_reid",
   "crop_max_zoom": 2.5

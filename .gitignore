@@ -7,13 +7,19 @@ __pycache__/
 .env
 .vscode/
 
+external/
 logs/
 recordings/
 assets/videos/
+datasets/
+weights/
 *.pt
+*.onnx
+*.torchscript
 dist/*.zip
 Stanford_Car-*/
 runs/
+autocam_tracker/tracking/.dynamic_botsort_reid.yaml
 
 .DS_Store
 Thumbs.db
