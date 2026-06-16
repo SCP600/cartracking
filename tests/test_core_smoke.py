@@ -18,6 +18,7 @@ from autocam_tracker.identity.global_identity_manager import GlobalIdentityManag
 from scripts import (
     auto_curate_vehicle_identity_tracks,
     build_vehicle_identity_candidates,
+    cluster_vehicle_identity_tracks,
     curate_vehicle_identity_dataset,
     export_fastreid_reid_onnx,
     prepare_fastreid_veri_dataset,
@@ -410,6 +411,82 @@ class CoreSmokeTest(unittest.TestCase):
             self.assertEqual(summary.val_count, 2)
             self.assertEqual(len(list((output_dir / "train" / "vehicle_0001").glob("*.jpg"))), 4)
             self.assertEqual(len(list((output_dir / "val" / "vehicle_0001").glob("*.jpg"))), 2)
+
+    def test_cluster_vehicle_identity_tracks_merges_similar_track_embeddings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            candidates_root = root / "datasets" / "vehicle_identity_candidates_batch"
+            output_dir = root / "datasets" / "vehicle_identity_global"
+
+            from PIL import Image
+
+            rows = []
+            for segment, track_id, frame_start, color in (
+                ("seg_000000_000060", 1, 0, (255, 0, 0)),
+                ("seg_000120_000180", 2, 120, (250, 0, 0)),
+                ("seg_000240_000300", 3, 240, (0, 0, 255)),
+            ):
+                track_dir = candidates_root / segment / "cam_000_video" / f"track_{track_id:04d}"
+                track_dir.mkdir(parents=True)
+                for index in range(5):
+                    Image.new("RGB", (32, 20), color).save(track_dir / f"frame_{frame_start + index:06d}.jpg")
+                representative_crop = track_dir / f"frame_{frame_start:06d}.jpg"
+                rows.append(
+                    f"cam_000_video,{track_id},5,{frame_start},{frame_start + 4},0.80,vehicle,{representative_crop},True\n"
+                )
+
+            for segment in ("seg_000000_000060", "seg_000120_000180", "seg_000240_000300"):
+                summary_path = candidates_root / segment / "track_summary.csv"
+                segment_rows = [
+                    row
+                    for row in rows
+                    if f"track_{int(row.split(',')[1]):04d}" in row and segment in row
+                ]
+                summary_path.write_text(
+                    "camera_name,track_id,crop_count,first_frame_index,last_frame_index,mean_confidence,label,representative_crop,keep\n"
+                    + "".join(segment_rows),
+                    encoding="utf-8",
+                )
+
+            def fake_extractor(paths: list[Path]) -> np.ndarray:
+                features = []
+                for path in paths:
+                    if "track_0001" in str(path) or "track_0002" in str(path):
+                        features.append(np.array([1.0, 0.0], dtype="float32"))
+                    else:
+                        features.append(np.array([0.0, 1.0], dtype="float32"))
+                return np.stack(features)
+
+            manual_merge_csv = root / "manual_global_identity.csv"
+            manual_merge_csv.write_text(
+                "include,global_identity_id,segment,camera_name,track_id,note\n"
+                "1,reviewed_vehicle_0001,seg_000000_000060,cam_000_video,1,\n"
+                "1,reviewed_vehicle_0001,seg_000120_000180,cam_000_video,2,\n",
+                encoding="utf-8",
+            )
+            summary = cluster_vehicle_identity_tracks.cluster_vehicle_identity_tracks(
+                candidates_root=candidates_root,
+                output_dir=output_dir,
+                model_path=None,
+                similarity_threshold=1.10,
+                min_crops=2,
+                min_mean_confidence=0.45,
+                max_crops_per_track=3,
+                feature_crops_per_track=2,
+                val_ratio=0.33,
+                manual_merge_csv=manual_merge_csv,
+                feature_extractor=fake_extractor,
+            )
+
+            self.assertEqual(summary.selected_track_count, 3)
+            self.assertEqual(summary.global_identity_count, 2)
+            self.assertEqual(summary.crop_count, 9)
+            self.assertEqual(summary.train_count, 6)
+            self.assertEqual(summary.val_count, 3)
+            self.assertTrue((output_dir / "train" / "reviewed_vehicle_0001").exists())
+            cluster_rows = (output_dir / "cluster_summary.csv").read_text(encoding="utf-8")
+            self.assertIn("reviewed_vehicle_0001", cluster_rows)
+            self.assertIn("global_vehicle_0001", cluster_rows)
 
     def test_prepare_yolo_dataset_from_identity_crops_writes_full_box_labels(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

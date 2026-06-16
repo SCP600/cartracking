@@ -28,6 +28,7 @@ class FastReIDTrainingPlan:
     config_file: str | None = None
     fastreid_root: str | None = None
     fastreid_datasets_root: str | None = None
+    init_weights: str | None = None
     device: str = "cuda:0"
 
 
@@ -45,6 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fastreid-root", type=str, default=None, help="Path to a local FastReID checkout")
     parser.add_argument("--config-file", type=str, default=None, help="FastReID config file to use with --run")
     parser.add_argument("--fastreid-datasets-root", type=str, default=None, help="Path containing FastReID datasets such as veri/")
+    parser.add_argument("--init-weights", type=str, default=None, help="Optional FastReID checkpoint to fine-tune from")
     parser.add_argument("--device", type=str, default="cuda:0", help="FastReID MODEL.DEVICE, e.g. cuda:0 or cpu")
     parser.add_argument("--num-gpus", type=int, default=1, help="Number of GPUs for FastReID training")
     parser.add_argument("--run", action="store_true", help="Run FastReID training instead of only writing the training plan")
@@ -123,6 +125,7 @@ def build_training_plan(args: argparse.Namespace, data_path: Path, output_path: 
         config_file=args.config_file,
         fastreid_root=args.fastreid_root,
         fastreid_datasets_root=args.fastreid_datasets_root,
+        init_weights=args.init_weights,
         device=args.device,
     )
 
@@ -145,6 +148,10 @@ def run_fastreid_training(args: argparse.Namespace, output_path: Path) -> int:
     if not config_file.exists():
         print(f"[錯誤] 找不到 FastReID config：{config_file}")
         return 1
+    init_weights = Path(args.init_weights).resolve() if args.init_weights else None
+    if init_weights and not init_weights.exists():
+        print(f"[錯誤] 找不到 FastReID init weights：{init_weights}")
+        return 1
 
     command = [
         sys.executable,
@@ -164,6 +171,8 @@ def run_fastreid_training(args: argparse.Namespace, output_path: Path) -> int:
         "MODEL.DEVICE",
         str(args.device),
     ]
+    if init_weights:
+        command.extend(["MODEL.WEIGHTS", str(init_weights)])
     print("\n[+] Starting FastReID training...")
     print(" ".join(command))
     env = None
