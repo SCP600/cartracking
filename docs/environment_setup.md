@@ -12,6 +12,7 @@ Before working on this project, read:
 
 - `skills.md`
 - `docs/spec.md`
+- `docs/new_computer_runtime_guide.md` when setting up a fresh clone with existing trained models
 
 The project is intentionally limited to a desktop Python demo. Do not add web frameworks, databases, cloud services, OCR systems, or custom training pipelines unless the user explicitly updates the spec.
 
