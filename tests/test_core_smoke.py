@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import queue
+import threading
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +12,7 @@ import torch
 
 from autocam_tracker.app.app_state import AppConfig
 from autocam_tracker.app.app_controller import AppController
+from autocam_tracker.app.pipeline_worker import PipelineWorker
 from autocam_tracker.data.recognized_vehicle_registry import RecognizedVehicleRegistry
 from autocam_tracker.detection.detection_models import VehicleDetection
 from autocam_tracker.detection.yolo26_detector import YOLO26Detector
@@ -183,6 +186,72 @@ class CoreSmokeTest(unittest.TestCase):
         self.assertEqual(summaries[0].registry_id, "G1")
         self.assertTrue(summaries[0].selected)
 
+    def test_recognized_registry_preserves_ids_when_runtime_state_resets(self) -> None:
+        detection = VehicleDetection(
+            detection_id=0,
+            local_track_id=7,
+            global_vehicle_id=1,
+            shot_id=2,
+            frame_index=10,
+            confidence=0.8,
+        )
+        registry = RecognizedVehicleRegistry()
+        registry.update([detection], selected_global_vehicle_id=1, tracking_status="Tracking")
+
+        registry.reset_runtime_state()
+        summaries = registry.summaries()
+
+        self.assertEqual(len(summaries), 1)
+        self.assertEqual(summaries[0].global_vehicle_id, 1)
+        self.assertFalse(summaries[0].selected)
+        self.assertEqual(summaries[0].status, "NotVisible")
+
+    def test_pipeline_seek_preserves_recognized_vehicle_registry(self) -> None:
+        class FakeSource:
+            def __init__(self) -> None:
+                self.seek_calls: list[int] = []
+
+            def seek(self, frame_index: int) -> bool:
+                self.seek_calls.append(frame_index)
+                return True
+
+        class FakeDetector:
+            def __init__(self) -> None:
+                self.reset_count = 0
+
+            def reset_tracking(self) -> None:
+                self.reset_count += 1
+
+        source = FakeSource()
+        detector = FakeDetector()
+        worker = PipelineWorker(
+            source=source,
+            detector=detector,
+            tracker_config=Path("tracker.yaml"),
+            frame_queue=queue.Queue(),
+            stop_event=threading.Event(),
+            app_config=AppConfig(model_path=Path("model.pt")),
+        )
+        detection = VehicleDetection(
+            detection_id=0,
+            local_track_id=7,
+            global_vehicle_id=1,
+            shot_id=0,
+            frame_index=10,
+            confidence=0.8,
+        )
+        worker.recognized_registry.update([detection], selected_global_vehicle_id=1, tracking_status="Tracking")
+
+        worker._seek_source(42)
+        summaries = worker.recognized_registry.summaries()
+
+        self.assertEqual(source.seek_calls, [42])
+        self.assertEqual(detector.reset_count, 1)
+        self.assertEqual(len(summaries), 1)
+        self.assertEqual(summaries[0].global_vehicle_id, 1)
+        self.assertFalse(summaries[0].selected)
+        self.assertEqual(summaries[0].status, "NotVisible")
+
     def test_recognized_registry_assigns_gid_to_unselected_vehicle(self) -> None:
         detection = VehicleDetection(
             detection_id=0,
@@ -201,6 +270,8 @@ class CoreSmokeTest(unittest.TestCase):
         self.assertEqual(summaries[0].global_vehicle_id, 1)
         self.assertEqual(detection.global_vehicle_id, 1)
         self.assertEqual(registry.local_track_aliases_for_global(1), [7])
+        self.assertEqual(registry.local_track_aliases_for_global(1, shot_id=2), [7])
+        self.assertEqual(registry.local_track_aliases_for_global(1, shot_id=3), [])
 
     def test_recognized_registry_merges_track_fragments_by_appearance(self) -> None:
         thumb = np.zeros((54, 96, 3), dtype=np.uint8)

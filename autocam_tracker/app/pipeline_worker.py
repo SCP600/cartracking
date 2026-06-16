@@ -126,7 +126,7 @@ class PipelineWorker(threading.Thread):
 
             self.recognized_registry.apply_known_ids(detections)
             self.store.update(detections)
-            resolved_selection = self._resolve_selection_request(detections, selection_request)
+            resolved_selection = self._resolve_selection_request(detections, selection_request, self._shot_id)
 
             track_start = time.perf_counter()
             target = self.identity_manager.update(
@@ -192,6 +192,7 @@ class PipelineWorker(threading.Thread):
         self,
         detections: list,
         selection_request: tuple[int, int, int, bool] | None,
+        shot_id: int,
     ) -> tuple[int, int] | None:
         if selection_request is None:
             return None
@@ -204,19 +205,20 @@ class PipelineWorker(threading.Thread):
             if detection.global_vehicle_id == global_vehicle_id:
                 return detection.detection_id, detection.local_track_id
 
-        aliases = set(self.recognized_registry.local_track_aliases_for_global(global_vehicle_id))
+        aliases = set(self.recognized_registry.local_track_aliases_for_global(global_vehicle_id, shot_id=shot_id))
         if aliases:
             for detection in detections:
                 if detection.local_track_id in aliases:
                     return detection.detection_id, detection.local_track_id
-        if local_track_id >= 0:
-            return detection_id, local_track_id
-        return detection_id, local_track_id
+        self._crop_focus_enabled = False
+        return None
 
     def _reset_tracking_state(self, clear_registry: bool) -> None:
         self.identity_manager.reset()
         if clear_registry:
             self.recognized_registry.clear()
+        else:
+            self.recognized_registry.reset_runtime_state()
         self.cropper.reset()
         self._crop_focus_enabled = False
 
@@ -226,7 +228,7 @@ class PipelineWorker(threading.Thread):
         self.detector.reset_tracking()
         self.scene_cut_detector = SceneCutDetector()
         self._shot_id += 1
-        self._reset_tracking_state(clear_registry=True)
+        self._reset_tracking_state(clear_registry=False)
 
     def _push_latest(self, frame_data) -> None:
         try:

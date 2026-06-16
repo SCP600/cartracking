@@ -108,6 +108,12 @@ class RecognizedVehicleRegistry:
         self._next_registry_id = 1
         self._next_global_vehicle_id = 1
 
+    def reset_runtime_state(self) -> None:
+        for item in self._items.values():
+            item.selected = False
+            item.status = "NotVisible"
+            item.match_score = 0.0
+
     def _key(self, detection: VehicleDetection) -> str:
         if detection.global_vehicle_id >= 0:
             return f"G{detection.global_vehicle_id}"
@@ -132,9 +138,11 @@ class RecognizedVehicleRegistry:
 
         return self._new_global_key(), 0.0
 
-    def local_track_aliases_for_global(self, global_vehicle_id: int) -> list[int]:
+    def local_track_aliases_for_global(self, global_vehicle_id: int, shot_id: int | None = None) -> list[int]:
         for item in self._items.values():
             if item.global_vehicle_id == global_vehicle_id:
+                if shot_id is not None and item.shot_id != shot_id:
+                    return []
                 aliases = list(item.local_track_aliases)
                 if item.local_track_id >= 0 and item.local_track_id not in aliases:
                     aliases.append(item.local_track_id)
