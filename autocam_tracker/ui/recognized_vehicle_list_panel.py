@@ -49,5 +49,5 @@ class RecognizedVehicleListPanel(ttk.LabelFrame):
             f"{prefix} {vehicle.registry_id} "
             f"G{global_id} L{local_id} shot{vehicle.shot_id} "
             f"{vehicle.status} seen{vehicle.seen_frames} conf{vehicle.confidence:.2f} "
-            f"match{vehicle.match_score:.2f} aliases[{aliases}]"
+            f"mem{vehicle.reid_feature_count} match{vehicle.match_score:.2f} aliases[{aliases}]"
         )

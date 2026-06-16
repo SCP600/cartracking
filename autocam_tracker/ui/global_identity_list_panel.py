@@ -56,5 +56,6 @@ class GlobalIdentityListPanel(ttk.LabelFrame):
         return (
             f"{prefix} G{vehicle.global_vehicle_id}  L{local_id}  "
             f"{vehicle.status}  seen{vehicle.seen_frames}  "
-            f"conf{vehicle.confidence:.2f}  aliases[{aliases}]"
+            f"conf{vehicle.confidence:.2f}  mem{vehicle.reid_feature_count}  "
+            f"match{vehicle.match_score:.2f}  aliases[{aliases}]"
         )

@@ -19,6 +19,11 @@ class AppConfig:
     display_width: int = 640
     display_height: int = 360
     crop_max_zoom: float = 2.5
+    gid_reid_memory_size: int = 24
+    gid_reid_match_threshold: float = 0.82
+    gid_reid_cross_shot_threshold: float = 0.86
+    gid_reid_margin: float = 0.04
+    gid_reid_duplicate_similarity: float = 0.985
 
     @classmethod
     def from_project_root(cls, project_root: Path) -> "AppConfig":
@@ -44,6 +49,11 @@ class AppConfig:
             display_width=int(raw.get("display_width", 640)),
             display_height=int(raw.get("display_height", 360)),
             crop_max_zoom=float(raw.get("crop_max_zoom", 2.5)),
+            gid_reid_memory_size=int(raw.get("gid_reid_memory_size", 24)),
+            gid_reid_match_threshold=float(raw.get("gid_reid_match_threshold", 0.82)),
+            gid_reid_cross_shot_threshold=float(raw.get("gid_reid_cross_shot_threshold", 0.86)),
+            gid_reid_margin=float(raw.get("gid_reid_margin", 0.04)),
+            gid_reid_duplicate_similarity=float(raw.get("gid_reid_duplicate_similarity", 0.985)),
         )
 
 

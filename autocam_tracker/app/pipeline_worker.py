@@ -15,6 +15,7 @@ from autocam_tracker.detection.yolo26_detector import YOLO26Detector
 from autocam_tracker.framing.crop_controller import CropController
 from autocam_tracker.framing.framing_controller import FramingController
 from autocam_tracker.identity.global_identity_manager import GlobalIdentityManager
+from autocam_tracker.identity.reid_feature_extractor import RuntimeReIDFeatureExtractor
 from autocam_tracker.utils.image_utils import draw_detections
 from autocam_tracker.utils.scene_cut import SceneCutDetector
 from autocam_tracker.video.video_source import VideoSource
@@ -38,8 +39,15 @@ class PipelineWorker(threading.Thread):
         self.stop_event = stop_event
         self.app_config = app_config
         self.store = DetectionStore()
-        self.recognized_registry = RecognizedVehicleRegistry()
+        self.recognized_registry = RecognizedVehicleRegistry(
+            reid_memory_size=app_config.gid_reid_memory_size,
+            reid_match_threshold=app_config.gid_reid_match_threshold,
+            reid_cross_shot_threshold=app_config.gid_reid_cross_shot_threshold,
+            reid_margin=app_config.gid_reid_margin,
+            reid_duplicate_similarity=app_config.gid_reid_duplicate_similarity,
+        )
         self.thumbnail_cropper = ThumbnailCropper()
+        self.reid_feature_extractor = RuntimeReIDFeatureExtractor(app_config.reid_model_path, device=app_config.device)
         self.identity_manager = GlobalIdentityManager()
         self.scene_cut_detector = SceneCutDetector()
         self.framing = FramingController()
@@ -124,6 +132,7 @@ class PipelineWorker(threading.Thread):
             for detection in detections:
                 detection.thumbnail = self.thumbnail_cropper.crop(frame, detection.bbox)
 
+            self.reid_feature_extractor.encode_detections(detections)
             self.recognized_registry.apply_known_ids(detections)
             self.store.update(detections)
             resolved_selection = self._resolve_selection_request(detections, selection_request, self._shot_id)

@@ -19,6 +19,7 @@ from autocam_tracker.detection.yolo26_detector import YOLO26Detector
 from autocam_tracker.framing.crop_controller import CropController, CropResult
 from autocam_tracker.framing.framing_controller import FramingController
 from autocam_tracker.identity.global_identity_manager import GlobalIdentityManager
+from autocam_tracker.identity.reid_feature_extractor import RuntimeReIDFeatureExtractor
 from autocam_tracker.video.video_file_source import VideoFileSource
 from scripts import (
     auto_curate_vehicle_identity_tracks,
@@ -76,6 +77,35 @@ class CoreSmokeTest(unittest.TestCase):
         self.assertIsNotNone(target)
         self.assertEqual(manager.selected_global_vehicle_id, 12)
         self.assertEqual(detection.global_vehicle_id, 12)
+
+    def test_global_identity_reanchors_by_registry_gid(self) -> None:
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        first = VehicleDetection(
+            detection_id=0,
+            local_track_id=9,
+            global_vehicle_id=12,
+            confidence=0.9,
+            bbox=(100, 80, 60, 40),
+            center=(130, 100),
+        )
+        manager = GlobalIdentityManager()
+        manager.update([first], (0, 9), frame, 0.0, 0, 0)
+
+        later = VehicleDetection(
+            detection_id=1,
+            local_track_id=31,
+            global_vehicle_id=12,
+            confidence=0.88,
+            reid_score=0.91,
+            reid_matched=True,
+            bbox=(150, 90, 64, 42),
+            center=(182, 111),
+        )
+        target = manager.update([later], None, frame, 33.0, 0, 1)
+
+        self.assertIs(target, later)
+        self.assertEqual(manager.selected_global_vehicle_id, 12)
+        self.assertEqual(manager.selected_local_track_id, 31)
 
     def test_crop_output_keeps_frame_shape(self) -> None:
         frame = np.zeros((240, 320, 3), dtype=np.uint8)
@@ -273,6 +303,67 @@ class CoreSmokeTest(unittest.TestCase):
         self.assertEqual(registry.local_track_aliases_for_global(1, shot_id=2), [7])
         self.assertEqual(registry.local_track_aliases_for_global(1, shot_id=3), [])
 
+    def test_recognized_registry_matches_reid_memory_across_shots(self) -> None:
+        registry = RecognizedVehicleRegistry(reid_cross_shot_threshold=0.86, reid_margin=0.02)
+        first = VehicleDetection(
+            detection_id=0,
+            local_track_id=7,
+            shot_id=0,
+            frame_index=10,
+            confidence=0.8,
+            reid_feature=np.array([1.0, 0.0], dtype=np.float32),
+        )
+        registry.update([first], selected_global_vehicle_id=-1, tracking_status="Detecting")
+
+        later = VehicleDetection(
+            detection_id=0,
+            local_track_id=3,
+            shot_id=1,
+            frame_index=200,
+            confidence=0.85,
+            reid_feature=np.array([0.99, 0.04], dtype=np.float32),
+        )
+        registry.apply_known_ids([later])
+        registry.update([later], selected_global_vehicle_id=-1, tracking_status="Detecting")
+        summaries = registry.summaries()
+
+        self.assertEqual(later.global_vehicle_id, 1)
+        self.assertTrue(later.reid_matched)
+        self.assertEqual(len(summaries), 1)
+        self.assertEqual(summaries[0].global_vehicle_id, 1)
+        self.assertEqual(summaries[0].local_track_aliases, [3])
+        self.assertGreaterEqual(summaries[0].reid_feature_count, 1)
+
+    def test_recognized_registry_keeps_small_diverse_reid_memory(self) -> None:
+        registry = RecognizedVehicleRegistry(reid_memory_size=2, reid_duplicate_similarity=0.98)
+        features = [
+            np.array([1.0, 0.0], dtype=np.float32),
+            np.array([0.999, 0.02], dtype=np.float32),
+            np.array([0.0, 1.0], dtype=np.float32),
+            np.array([-1.0, 0.0], dtype=np.float32),
+        ]
+        for index, feature in enumerate(features):
+            registry.update(
+                [
+                    VehicleDetection(
+                        detection_id=0,
+                        local_track_id=7,
+                        global_vehicle_id=1,
+                        shot_id=0,
+                        frame_index=index,
+                        confidence=0.8,
+                        reid_feature=feature,
+                    )
+                ],
+                selected_global_vehicle_id=-1,
+                tracking_status="Detecting",
+            )
+
+        summary = registry.summaries()[0]
+        self.assertEqual(summary.global_vehicle_id, 1)
+        self.assertEqual(summary.reid_feature_count, 2)
+        self.assertLessEqual(len(summary.reid_features), 2)
+
     def test_recognized_registry_merges_track_fragments_by_appearance(self) -> None:
         thumb = np.zeros((54, 96, 3), dtype=np.uint8)
         thumb[:, :] = (245, 245, 245)
@@ -305,6 +396,14 @@ class CoreSmokeTest(unittest.TestCase):
         self.assertEqual(len(summaries), 1)
         self.assertEqual(summaries[0].registry_id, "G1")
         self.assertEqual(summaries[0].local_track_aliases, [35, 41])
+
+    def test_runtime_reid_extractor_noops_without_model(self) -> None:
+        detection = VehicleDetection(thumbnail=np.zeros((54, 96, 3), dtype=np.uint8))
+        extractor = RuntimeReIDFeatureExtractor(Path("missing.torchscript"))
+
+        extractor.encode_detections([detection])
+
+        self.assertIsNone(detection.reid_feature)
 
     def test_app_config_loads_reid_model_path_from_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
