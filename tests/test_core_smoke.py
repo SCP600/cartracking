@@ -13,7 +13,8 @@ from autocam_tracker.app.app_controller import AppController
 from autocam_tracker.data.recognized_vehicle_registry import RecognizedVehicleRegistry
 from autocam_tracker.detection.detection_models import VehicleDetection
 from autocam_tracker.detection.yolo26_detector import YOLO26Detector
-from autocam_tracker.framing.crop_controller import CropController
+from autocam_tracker.framing.crop_controller import CropController, CropResult
+from autocam_tracker.framing.framing_controller import FramingController
 from autocam_tracker.identity.global_identity_manager import GlobalIdentityManager
 from autocam_tracker.video.video_file_source import VideoFileSource
 from scripts import (
@@ -119,6 +120,50 @@ class CoreSmokeTest(unittest.TestCase):
                 self.assertEqual(source.frame_index, 4)
             finally:
                 source.release()
+
+    def test_frame_data_carries_video_timeline_metadata(self) -> None:
+        frame = np.zeros((48, 64, 3), dtype=np.uint8)
+        crop_result = CropResult(
+            frame=frame,
+            crop_x=0,
+            crop_y=0,
+            crop_w=64,
+            crop_h=48,
+            zoom_ratio=1.0,
+            zoom_error=0.0,
+            error_x=0.0,
+            error_y=0.0,
+            normalized_error_x=0.0,
+            normalized_error_y=0.0,
+        )
+
+        frame_data = FramingController().build_frame_data(
+            raw_frame=frame,
+            detection_frame=frame,
+            cropped_frame=frame,
+            detections=[],
+            camera_id=0,
+            shot_id=0,
+            frame_index=12,
+            total_frame_count=100,
+            timestamp_ms=400.0,
+            tracking_status="Detecting",
+            selected_global_vehicle_id=-1,
+            selected_local_track_id=-1,
+            selected_detection_id=-1,
+            camera_cut_detected=False,
+            fps=30.0,
+            inference_time_ms=0.0,
+            tracking_time_ms=0.0,
+            reframe_time_ms=0.0,
+            crop_result=crop_result,
+            lost_frames=0,
+            candidate_count=0,
+            reacquire_score=0.0,
+        )
+
+        self.assertEqual(frame_data.frame_index, 12)
+        self.assertEqual(frame_data.total_frame_count, 100)
 
     def test_recognized_registry_keeps_anchored_summary(self) -> None:
         detection = VehicleDetection(
