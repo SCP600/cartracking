@@ -15,6 +15,7 @@ from autocam_tracker.detection.detection_models import VehicleDetection
 from autocam_tracker.detection.yolo26_detector import YOLO26Detector
 from autocam_tracker.framing.crop_controller import CropController
 from autocam_tracker.identity.global_identity_manager import GlobalIdentityManager
+from autocam_tracker.video.video_file_source import VideoFileSource
 from scripts import (
     auto_curate_vehicle_identity_tracks,
     build_vehicle_identity_candidates,
@@ -95,6 +96,29 @@ class CoreSmokeTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             controller._parse_screen_region("10,20,8,200")
+
+    def test_video_file_source_seek_updates_frame_position(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            import cv2
+
+            video_path = Path(tmp) / "seek_test.avi"
+            writer = cv2.VideoWriter(str(video_path), cv2.VideoWriter_fourcc(*"MJPG"), 10.0, (64, 48))
+            for index in range(6):
+                frame = np.full((48, 64, 3), index * 30, dtype=np.uint8)
+                writer.write(frame)
+            writer.release()
+
+            source = VideoFileSource(video_path)
+            source.open()
+            try:
+                self.assertGreaterEqual(source.frame_count, 6)
+                self.assertTrue(source.seek(3))
+                ok, frame = source.read()
+                self.assertTrue(ok)
+                self.assertIsNotNone(frame)
+                self.assertEqual(source.frame_index, 4)
+            finally:
+                source.release()
 
     def test_recognized_registry_keeps_anchored_summary(self) -> None:
         detection = VehicleDetection(

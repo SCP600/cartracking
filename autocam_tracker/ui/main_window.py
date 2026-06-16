@@ -11,6 +11,7 @@ from autocam_tracker.ui.global_identity_list_panel import GlobalIdentityListPane
 from autocam_tracker.ui.live_view_panel import LiveViewPanel
 from autocam_tracker.ui.recognized_vehicle_list_panel import RecognizedVehicleListPanel
 from autocam_tracker.ui.status_panel import StatusPanel
+from autocam_tracker.ui.timeline_panel import TimelinePanel
 from autocam_tracker.ui.vehicle_list_panel import VehicleListPanel
 from autocam_tracker.video.screen_region_source import capture_screen_region_once
 
@@ -35,6 +36,7 @@ class MainWindow:
             on_start=self._start,
             on_stop=self.controller.stop,
             on_reset=self.controller.reset_target,
+            on_reset_cropped=self.controller.reset_cropped,
             on_source_preview=self._preview_source,
             default_tracker=self.controller.config.tracker,
         )
@@ -50,6 +52,9 @@ class MainWindow:
         self.raw_view.pack(side="left", fill="both", expand=True, padx=(0, 4))
         self.crop_view = LiveViewPanel(views, "Cropped / Output View", (660, 380))
         self.crop_view.pack(side="left", fill="both", expand=True, padx=(4, 0))
+
+        self.timeline_panel = TimelinePanel(main, on_seek=self.controller.seek_frame)
+        self.timeline_panel.pack(side="top", fill="x", pady=(6, 0))
 
         bottom = ttk.Frame(main)
         bottom.pack(side="top", fill="both", expand=True, pady=(8, 0))
@@ -94,6 +99,7 @@ class MainWindow:
             self.gid_list.update_vehicles(frame_data.recognized_vehicles)
             self.recognized_list.update_vehicles(frame_data.recognized_vehicles)
             self.status_panel.update_status(frame_data)
+            self.timeline_panel.update_timeline(frame_data)
         self.root.after(50, self._poll)
 
     def _on_close(self) -> None:

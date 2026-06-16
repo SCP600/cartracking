@@ -15,6 +15,7 @@ class VehicleDetection:
     camera_id: int = 0
     shot_id: int = 0
     frame_index: int = 0
+    total_frame_count: int = 0
     timestamp_ms: float = 0.0
 
     label: str = "car"
