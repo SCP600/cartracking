@@ -7,7 +7,7 @@ import re
 import shutil
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, TypeVar
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -17,6 +17,7 @@ IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 FALSE_VALUES = {"", "0", "false", "no", "n", "skip"}
 TRUE_VALUES = {"1", "true", "yes", "y", "keep"}
 FeatureExtractor = Callable[[list[Path]], np.ndarray]
+T = TypeVar("T")
 
 
 @dataclass
@@ -66,8 +67,9 @@ class GlobalIdentitySummary:
     similarity_threshold: float = 0.82
     min_crops: int = 5
     min_mean_confidence: float = 0.45
-    max_crops_per_track: int = 40
-    feature_crops_per_track: int = 8
+    max_crops_per_track: int = 24
+    max_crops_per_global_identity: int = 72
+    feature_crops_per_track: int = 4
     assignments: list[GlobalTrackAssignment] = field(default_factory=list)
     note: str = (
         "Tracks with similar ReID embeddings are merged into global vehicle identities. "
@@ -100,8 +102,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--similarity-threshold", type=float, default=0.82)
     parser.add_argument("--min-crops", type=int, default=5)
     parser.add_argument("--min-mean-confidence", type=float, default=0.45)
-    parser.add_argument("--max-crops-per-track", type=int, default=40)
-    parser.add_argument("--feature-crops-per-track", type=int, default=8)
+    parser.add_argument("--max-crops-per-track", type=int, default=24)
+    parser.add_argument("--max-crops-per-global-identity", type=int, default=72, help="0 means no global identity cap")
+    parser.add_argument("--feature-crops-per-track", type=int, default=4)
     parser.add_argument("--val-ratio", type=float, default=0.25)
     parser.add_argument("--imgsz", type=int, default=224)
     parser.add_argument("--batch-size", type=int, default=64)
@@ -124,6 +127,7 @@ def main(argv: list[str] | None = None) -> int:
         min_crops=args.min_crops,
         min_mean_confidence=args.min_mean_confidence,
         max_crops_per_track=args.max_crops_per_track,
+        max_crops_per_global_identity=args.max_crops_per_global_identity,
         feature_crops_per_track=args.feature_crops_per_track,
         val_ratio=args.val_ratio,
         imgsz=args.imgsz,
@@ -146,8 +150,9 @@ def cluster_vehicle_identity_tracks(
     similarity_threshold: float = 0.82,
     min_crops: int = 5,
     min_mean_confidence: float = 0.45,
-    max_crops_per_track: int = 40,
-    feature_crops_per_track: int = 8,
+    max_crops_per_track: int = 24,
+    max_crops_per_global_identity: int = 72,
+    feature_crops_per_track: int = 4,
     val_ratio: float = 0.25,
     imgsz: int = 224,
     batch_size: int = 64,
@@ -193,6 +198,7 @@ def cluster_vehicle_identity_tracks(
             min_crops=min_crops,
             min_mean_confidence=min_mean_confidence,
             max_crops_per_track=max_crops_per_track,
+            max_crops_per_global_identity=max_crops_per_global_identity,
             feature_crops_per_track=feature_crops_per_track,
             similarity_threshold=similarity_threshold,
         )
@@ -229,6 +235,7 @@ def cluster_vehicle_identity_tracks(
             track = selected_tracks[member_index]
             sampled_paths = evenly_sample([Path(path) for path in track.crop_paths], max_crops_per_track)
             cluster_crop_paths.extend((member_index, crop_path) for crop_path in sampled_paths)
+        cluster_crop_paths = evenly_sample_items(cluster_crop_paths, max_crops_per_global_identity)
 
         train_items, val_items = split_train_val(cluster_crop_paths, val_ratio)
         per_track_counts: dict[tuple[int, str], int] = {}
@@ -305,6 +312,7 @@ def cluster_vehicle_identity_tracks(
         min_crops=min_crops,
         min_mean_confidence=min_mean_confidence,
         max_crops_per_track=max_crops_per_track,
+        max_crops_per_global_identity=max_crops_per_global_identity,
         feature_crops_per_track=feature_crops_per_track,
         assignments=assignments,
     )
@@ -528,12 +536,16 @@ def tracks_overlap(left: TrackCandidate, right: TrackCandidate, overlap_margin: 
 
 
 def evenly_sample(paths: list[Path], max_items: int) -> list[Path]:
-    if max_items <= 0 or len(paths) <= max_items:
-        return paths
+    return evenly_sample_items(paths, max_items)
+
+
+def evenly_sample_items(items: list[T], max_items: int) -> list[T]:
+    if max_items <= 0 or len(items) <= max_items:
+        return items
     if max_items == 1:
-        return [paths[0]]
-    step = (len(paths) - 1) / (max_items - 1)
-    return [paths[round(index * step)] for index in range(max_items)]
+        return [items[0]]
+    step = (len(items) - 1) / (max_items - 1)
+    return [items[round(index * step)] for index in range(max_items)]
 
 
 def track_key(track: TrackCandidate) -> tuple[str, str, int]:
@@ -622,6 +634,9 @@ def write_readme(path: Path, summary: GlobalIdentitySummary) -> None:
                 f"Train crops: {summary.train_count}",
                 f"Val crops: {summary.val_count}",
                 f"Similarity threshold: {summary.similarity_threshold}",
+                f"Feature crops per track: {summary.feature_crops_per_track}",
+                f"Max crops per track: {summary.max_crops_per_track}",
+                f"Max crops per global identity: {summary.max_crops_per_global_identity}",
                 "",
             ]
         ),

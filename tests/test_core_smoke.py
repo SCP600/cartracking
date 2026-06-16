@@ -551,6 +551,7 @@ class CoreSmokeTest(unittest.TestCase):
                 min_crops=2,
                 min_mean_confidence=0.45,
                 max_crops_per_track=3,
+                max_crops_per_global_identity=5,
                 feature_crops_per_track=2,
                 val_ratio=0.33,
                 manual_merge_csv=manual_merge_csv,
@@ -559,9 +560,10 @@ class CoreSmokeTest(unittest.TestCase):
 
             self.assertEqual(summary.selected_track_count, 3)
             self.assertEqual(summary.global_identity_count, 2)
-            self.assertEqual(summary.crop_count, 9)
-            self.assertEqual(summary.train_count, 6)
+            self.assertEqual(summary.crop_count, 8)
+            self.assertEqual(summary.train_count, 5)
             self.assertEqual(summary.val_count, 3)
+            self.assertEqual(summary.max_crops_per_global_identity, 5)
             self.assertTrue((output_dir / "train" / "reviewed_vehicle_0001").exists())
             cluster_rows = (output_dir / "cluster_summary.csv").read_text(encoding="utf-8")
             self.assertIn("reviewed_vehicle_0001", cluster_rows)
