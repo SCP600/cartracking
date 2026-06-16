@@ -14,8 +14,24 @@ class RecognizedVehicleRegistry:
         self.max_items = max_items
         self._items: OrderedDict[str, RecognizedVehicleSummary] = OrderedDict()
         self._next_registry_id = 1
+        self._next_global_vehicle_id = 1
         self.max_merge_gap_frames = 90
         self.merge_min_score = 0.58
+
+    def apply_known_ids(self, detections: list[VehicleDetection]) -> None:
+        for detection in detections:
+            if detection.global_vehicle_id >= 0:
+                self._reserve_global_id(detection.global_vehicle_id)
+                continue
+            signature = self._color_signature(detection)
+            key = self._find_by_track_alias(detection)
+            if key is None:
+                key, _ = self._find_appearance_match(detection, signature)
+            if key is None:
+                continue
+            item = self._items.get(key)
+            if item is not None and item.global_vehicle_id >= 0:
+                detection.global_vehicle_id = item.global_vehicle_id
 
     def update(self, detections: list[VehicleDetection], selected_global_vehicle_id: int, tracking_status: str) -> None:
         seen_this_frame: set[str] = set()
@@ -28,7 +44,7 @@ class RecognizedVehicleRegistry:
                 self._items[key] = RecognizedVehicleSummary(
                     registry_id=key,
                     local_track_id=detection.local_track_id,
-                    global_vehicle_id=detection.global_vehicle_id,
+                    global_vehicle_id=self._global_id_from_key(key),
                     camera_id=detection.camera_id,
                     shot_id=detection.shot_id,
                     first_frame_index=detection.frame_index,
@@ -38,9 +54,12 @@ class RecognizedVehicleRegistry:
                     color_signature=signature,
                 )
             item = self._items[key]
+            if item.global_vehicle_id >= 0:
+                detection.global_vehicle_id = item.global_vehicle_id
             item.local_track_id = detection.local_track_id
             if detection.global_vehicle_id >= 0:
                 item.global_vehicle_id = detection.global_vehicle_id
+                self._reserve_global_id(item.global_vehicle_id)
             item.camera_id = detection.camera_id
             item.shot_id = detection.shot_id
             item.last_frame_index = detection.frame_index
@@ -87,6 +106,7 @@ class RecognizedVehicleRegistry:
     def clear(self) -> None:
         self._items.clear()
         self._next_registry_id = 1
+        self._next_global_vehicle_id = 1
 
     def _key(self, detection: VehicleDetection) -> str:
         if detection.global_vehicle_id >= 0:
@@ -110,9 +130,16 @@ class RecognizedVehicleRegistry:
         if match_key is not None:
             return match_key, score
 
-        key = f"R{self._next_registry_id}"
-        self._next_registry_id += 1
-        return key, 0.0
+        return self._new_global_key(), 0.0
+
+    def local_track_aliases_for_global(self, global_vehicle_id: int) -> list[int]:
+        for item in self._items.values():
+            if item.global_vehicle_id == global_vehicle_id:
+                aliases = list(item.local_track_aliases)
+                if item.local_track_id >= 0 and item.local_track_id not in aliases:
+                    aliases.append(item.local_track_id)
+                return aliases
+        return []
 
     def _find_by_track_alias(self, detection: VehicleDetection) -> str | None:
         if detection.local_track_id < 0:
@@ -130,8 +157,6 @@ class RecognizedVehicleRegistry:
         best_key = None
         best_score = 0.0
         for key, item in self._items.items():
-            if item.global_vehicle_id >= 0:
-                continue
             if item.shot_id != detection.shot_id:
                 continue
             if detection.frame_index - item.last_frame_index > self.max_merge_gap_frames:
@@ -155,6 +180,28 @@ class RecognizedVehicleRegistry:
         motion = self._motion_similarity(item, detection)
         confidence = max(0.0, min(1.0, detection.confidence))
         return 0.50 * color + 0.22 * size + 0.18 * motion + 0.10 * confidence
+
+    def _new_global_key(self) -> str:
+        while f"G{self._next_global_vehicle_id}" in self._items:
+            self._next_global_vehicle_id += 1
+        key = f"G{self._next_global_vehicle_id}"
+        self._next_registry_id = max(self._next_registry_id, self._next_global_vehicle_id + 1)
+        self._next_global_vehicle_id += 1
+        return key
+
+    def _global_id_from_key(self, key: str) -> int:
+        if key.startswith("G") and key[1:].isdigit():
+            global_id = int(key[1:])
+            self._reserve_global_id(global_id)
+            return global_id
+        global_id = self._next_global_vehicle_id
+        self._reserve_global_id(global_id)
+        return global_id
+
+    def _reserve_global_id(self, global_vehicle_id: int) -> None:
+        if global_vehicle_id >= self._next_global_vehicle_id:
+            self._next_global_vehicle_id = global_vehicle_id + 1
+        self._next_registry_id = max(self._next_registry_id, self._next_global_vehicle_id)
 
     def _color_signature(self, detection: VehicleDetection) -> np.ndarray | None:
         if detection.thumbnail is None:

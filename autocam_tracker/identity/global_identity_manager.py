@@ -92,14 +92,17 @@ class GlobalIdentityManager:
         return None
 
     def _select(self, detection: VehicleDetection, frame: np.ndarray, timestamp_ms: float, camera_id: int, shot_id: int) -> None:
+        global_vehicle_id = detection.global_vehicle_id
+        if global_vehicle_id < 0:
+            global_vehicle_id = self.next_global_vehicle_id
+        self.next_global_vehicle_id = max(self.next_global_vehicle_id, global_vehicle_id + 1)
         identity = VehicleIdentity(
-            global_vehicle_id=self.next_global_vehicle_id,
+            global_vehicle_id=global_vehicle_id,
             created_at_ms=timestamp_ms,
             label=detection.label,
             camera_id=camera_id,
             shot_id=shot_id,
         )
-        self.next_global_vehicle_id += 1
         self.selected_identity = identity
         self._update_identity_from_detection(detection, frame, timestamp_ms, camera_id, shot_id)
         self.status = "TargetSelected"

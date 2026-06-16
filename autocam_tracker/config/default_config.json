@@ -6,6 +6,6 @@
   "imgsz": 640,
   "device": 0,
   "camera_id": 0,
-  "tracker": "botsort_reid",
+  "tracker": "botsort_reid_custom",
   "crop_max_zoom": 2.5
 }

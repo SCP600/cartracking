@@ -17,7 +17,9 @@ class ControlPanel(ttk.Frame):
         self.on_source_preview = on_source_preview
         self.source = SourceConfig(kind="webcam", value="0")
         self.source_text = tk.StringVar(value="Webcam 0")
-        self.tracker = tk.StringVar(value=default_tracker)
+        self.tracker_values = ("botsort", "botsort_reid_default", "botsort_reid_custom", "bytetrack")
+        tracker_value = default_tracker if default_tracker in self.tracker_values else "botsort_reid_custom"
+        self.tracker = tk.StringVar(value=tracker_value)
         self._build()
 
     def _build(self) -> None:
@@ -29,8 +31,8 @@ class ControlPanel(ttk.Frame):
         tracker_select = ttk.Combobox(
             self,
             textvariable=self.tracker,
-            values=("botsort", "botsort_reid", "bytetrack"),
-            width=13,
+            values=self.tracker_values,
+            width=22,
             state="readonly",
         )
         tracker_select.pack(side="left")

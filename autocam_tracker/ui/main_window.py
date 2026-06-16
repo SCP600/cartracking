@@ -7,6 +7,7 @@ from tkinter import messagebox, ttk
 from autocam_tracker.app.app_controller import AppController
 from autocam_tracker.app.app_state import SourceConfig
 from autocam_tracker.ui.control_panel import ControlPanel
+from autocam_tracker.ui.global_identity_list_panel import GlobalIdentityListPanel
 from autocam_tracker.ui.live_view_panel import LiveViewPanel
 from autocam_tracker.ui.recognized_vehicle_list_panel import RecognizedVehicleListPanel
 from autocam_tracker.ui.status_panel import StatusPanel
@@ -57,8 +58,10 @@ class MainWindow:
         lists.pack(side="left", fill="both", expand=True, padx=(0, 4))
 
         self.vehicle_list = VehicleListPanel(lists, on_select=self.controller.select_detection)
+        self.gid_list = GlobalIdentityListPanel(lists, on_select=self.controller.select_global_vehicle)
         self.recognized_list = RecognizedVehicleListPanel(lists)
         lists.add(self.vehicle_list, text="Current Detections")
+        lists.add(self.gid_list, text="GID Anchors")
         lists.add(self.recognized_list, text="Recognized")
 
         self.status_panel = StatusPanel(bottom)
@@ -88,6 +91,7 @@ class MainWindow:
             self.raw_view.update_frame(frame_data.detection_frame)
             self.crop_view.update_frame(frame_data.cropped_frame)
             self.vehicle_list.update_detections(frame_data.detections)
+            self.gid_list.update_vehicles(frame_data.recognized_vehicles)
             self.recognized_list.update_vehicles(frame_data.recognized_vehicles)
             self.status_panel.update_status(frame_data)
         self.root.after(50, self._poll)

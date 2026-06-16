@@ -54,6 +54,24 @@ class CoreSmokeTest(unittest.TestCase):
         self.assertEqual(manager.selected_global_vehicle_id, 1)
         self.assertEqual(manager.selected_local_track_id, -1)
 
+    def test_global_identity_adopts_preassigned_gid(self) -> None:
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        detection = VehicleDetection(
+            detection_id=0,
+            local_track_id=9,
+            global_vehicle_id=12,
+            confidence=0.9,
+            bbox=(100, 80, 60, 40),
+            center=(130, 100),
+        )
+        manager = GlobalIdentityManager()
+
+        target = manager.update([detection], (0, 9), frame, 0.0, 0, 0)
+
+        self.assertIsNotNone(target)
+        self.assertEqual(manager.selected_global_vehicle_id, 12)
+        self.assertEqual(detection.global_vehicle_id, 12)
+
     def test_crop_output_keeps_frame_shape(self) -> None:
         frame = np.zeros((240, 320, 3), dtype=np.uint8)
         target = VehicleDetection(
@@ -96,6 +114,25 @@ class CoreSmokeTest(unittest.TestCase):
         self.assertEqual(summaries[0].registry_id, "G1")
         self.assertTrue(summaries[0].selected)
 
+    def test_recognized_registry_assigns_gid_to_unselected_vehicle(self) -> None:
+        detection = VehicleDetection(
+            detection_id=0,
+            local_track_id=7,
+            shot_id=2,
+            frame_index=10,
+            confidence=0.8,
+        )
+        registry = RecognizedVehicleRegistry()
+
+        registry.update([detection], selected_global_vehicle_id=-1, tracking_status="Detecting")
+        summaries = registry.summaries()
+
+        self.assertEqual(len(summaries), 1)
+        self.assertEqual(summaries[0].registry_id, "G1")
+        self.assertEqual(summaries[0].global_vehicle_id, 1)
+        self.assertEqual(detection.global_vehicle_id, 1)
+        self.assertEqual(registry.local_track_aliases_for_global(1), [7])
+
     def test_recognized_registry_merges_track_fragments_by_appearance(self) -> None:
         thumb = np.zeros((54, 96, 3), dtype=np.uint8)
         thumb[:, :] = (245, 245, 245)
@@ -126,7 +163,7 @@ class CoreSmokeTest(unittest.TestCase):
         summaries = registry.summaries()
 
         self.assertEqual(len(summaries), 1)
-        self.assertEqual(summaries[0].registry_id, "R1")
+        self.assertEqual(summaries[0].registry_id, "G1")
         self.assertEqual(summaries[0].local_track_aliases, [35, 41])
 
     def test_app_config_loads_reid_model_path_from_json(self) -> None:
@@ -206,6 +243,24 @@ class CoreSmokeTest(unittest.TestCase):
 
             self.assertEqual(tracker_config, tracking_dir / ".dynamic_botsort_reid.yaml")
             self.assertIn(controller.config.reid_model_path.as_posix(), tracker_config.read_text(encoding="utf-8"))
+
+    def test_default_botsort_reid_config_keeps_auto_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            tracking_dir = project_root / "autocam_tracker" / "tracking"
+            tracking_dir.mkdir(parents=True)
+            base_config = tracking_dir / "custom_botsort_reid.yaml"
+            base_config.write_text(
+                "tracker_type: botsort\nwith_reid: true\nmodel: auto\n",
+                encoding="utf-8",
+            )
+            controller = AppController(project_root=project_root)
+            controller.config.reid_model_path = project_root / "weights" / "fastreid_vehicle.onnx"
+
+            tracker_config = controller._tracker_config_path("botsort_reid_default")
+
+            self.assertEqual(tracker_config, base_config)
+            self.assertEqual("auto", base_config.read_text(encoding="utf-8").split("model:", 1)[1].strip())
 
     def test_training_script_defaults_match_optimization_plan(self) -> None:
         fastreid_args = train_fastreid.build_parser().parse_args([])

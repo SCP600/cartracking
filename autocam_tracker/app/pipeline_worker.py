@@ -45,13 +45,13 @@ class PipelineWorker(threading.Thread):
         self.framing = FramingController()
         self.cropper = CropController(max_zoom=app_config.crop_max_zoom)
         self._lock = threading.Lock()
-        self._selection_request: tuple[int, int] | None = None
+        self._selection_request: tuple[int, int, int] | None = None
         self._reset_request = False
         self._shot_id = 0
 
-    def request_target_selection(self, detection_id: int, local_track_id: int = -1) -> None:
+    def request_target_selection(self, detection_id: int, local_track_id: int = -1, global_vehicle_id: int = -1) -> None:
         with self._lock:
-            self._selection_request = (detection_id, local_track_id)
+            self._selection_request = (detection_id, local_track_id, global_vehicle_id)
 
     def request_target_reset(self) -> None:
         with self._lock:
@@ -104,12 +104,14 @@ class PipelineWorker(threading.Thread):
             for detection in detections:
                 detection.thumbnail = self.thumbnail_cropper.crop(frame, detection.bbox)
 
+            self.recognized_registry.apply_known_ids(detections)
             self.store.update(detections)
+            resolved_selection = self._resolve_selection_request(detections, selection_request)
 
             track_start = time.perf_counter()
             target = self.identity_manager.update(
                 detections=detections,
-                selected_detection_id=selection_request,
+                selected_detection_id=resolved_selection,
                 frame=frame,
                 timestamp_ms=timestamp_ms,
                 camera_id=self.app_config.camera_id,
@@ -152,13 +154,37 @@ class PipelineWorker(threading.Thread):
 
             self._push_latest(frame_data)
 
-    def _consume_requests(self) -> tuple[tuple[int, int] | None, bool]:
+    def _consume_requests(self) -> tuple[tuple[int, int, int] | None, bool]:
         with self._lock:
             selection = self._selection_request
             reset = self._reset_request
             self._selection_request = None
             self._reset_request = False
             return selection, reset
+
+    def _resolve_selection_request(
+        self,
+        detections: list,
+        selection_request: tuple[int, int, int] | None,
+    ) -> tuple[int, int] | None:
+        if selection_request is None:
+            return None
+        detection_id, local_track_id, global_vehicle_id = selection_request
+        if local_track_id >= 0:
+            return detection_id, local_track_id
+        if global_vehicle_id < 0:
+            return detection_id, local_track_id
+
+        for detection in detections:
+            if detection.global_vehicle_id == global_vehicle_id:
+                return detection.detection_id, detection.local_track_id
+
+        aliases = set(self.recognized_registry.local_track_aliases_for_global(global_vehicle_id))
+        if aliases:
+            for detection in detections:
+                if detection.local_track_id in aliases:
+                    return detection.detection_id, detection.local_track_id
+        return detection_id, local_track_id
 
     def _push_latest(self, frame_data) -> None:
         try:
