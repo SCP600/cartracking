@@ -30,6 +30,7 @@ class VehicleDetection:
 
     color_signature: Optional[np.ndarray] = None
     appearance_score: float = 0.0
+    reid_feature: Optional[np.ndarray] = None
 
     reid_score: float = 0.0
     reid_matched: bool = False
@@ -40,6 +41,7 @@ class FrameData:
     camera_id: int = 0
     shot_id: int = 0
     frame_index: int = 0
+    total_frame_count: int = 0
     timestamp_ms: float = 0.0
 
     raw_frame: Optional[np.ndarray] = None
@@ -99,3 +101,5 @@ class RecognizedVehicleSummary:
     color_signature: Optional[np.ndarray] = None
     local_track_aliases: list[int] = field(default_factory=list)
     match_score: float = 0.0
+    reid_feature_count: int = 0
+    reid_features: list[np.ndarray] = field(default_factory=list, repr=False)

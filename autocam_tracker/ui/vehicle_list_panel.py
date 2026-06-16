@@ -51,4 +51,5 @@ class VehicleListPanel(ttk.LabelFrame):
         prefix = "*" if detection.selected else " "
         local_id = detection.local_track_id if detection.local_track_id >= 0 else "-"
         global_id = detection.global_vehicle_id if detection.global_vehicle_id >= 0 else "-"
-        return f"{prefix} D{detection.detection_id} L{local_id} G{global_id} {detection.confidence:.2f}"
+        reid = f" R{detection.reid_score:.2f}" if detection.reid_score > 0.0 else ""
+        return f"{prefix} D{detection.detection_id} L{local_id} G{global_id} {detection.confidence:.2f}{reid}"

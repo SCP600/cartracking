@@ -69,6 +69,14 @@ class GlobalIdentityManager:
 
         target = self._find_target_by_track(detections)
         if target is None:
+            target = self._find_target_by_global_id(detections)
+            if target is not None:
+                self.last_reacquire_score = max(
+                    target.reid_score,
+                    target.appearance_score,
+                    1.0 if target.reid_matched else 0.0,
+                )
+        if target is None:
             target, score = self.reacquire.choose(self.selected_identity, detections, frame)
             self.last_reacquire_score = score
 
@@ -92,14 +100,17 @@ class GlobalIdentityManager:
         return None
 
     def _select(self, detection: VehicleDetection, frame: np.ndarray, timestamp_ms: float, camera_id: int, shot_id: int) -> None:
+        global_vehicle_id = detection.global_vehicle_id
+        if global_vehicle_id < 0:
+            global_vehicle_id = self.next_global_vehicle_id
+        self.next_global_vehicle_id = max(self.next_global_vehicle_id, global_vehicle_id + 1)
         identity = VehicleIdentity(
-            global_vehicle_id=self.next_global_vehicle_id,
+            global_vehicle_id=global_vehicle_id,
             created_at_ms=timestamp_ms,
             label=detection.label,
             camera_id=camera_id,
             shot_id=shot_id,
         )
-        self.next_global_vehicle_id += 1
         self.selected_identity = identity
         self._update_identity_from_detection(detection, frame, timestamp_ms, camera_id, shot_id)
         self.status = "TargetSelected"
@@ -155,6 +166,15 @@ class GlobalIdentityManager:
             return None
         for detection in detections:
             if detection.local_track_id == track_id:
+                return detection
+        return None
+
+    def _find_target_by_global_id(self, detections: list[VehicleDetection]) -> VehicleDetection | None:
+        if self.selected_identity is None:
+            return None
+        global_vehicle_id = self.selected_identity.global_vehicle_id
+        for detection in detections:
+            if detection.global_vehicle_id == global_vehicle_id:
                 return detection
         return None
 

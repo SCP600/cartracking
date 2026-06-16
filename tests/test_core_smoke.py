@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import queue
+import threading
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,14 +12,19 @@ import torch
 
 from autocam_tracker.app.app_state import AppConfig
 from autocam_tracker.app.app_controller import AppController
+from autocam_tracker.app.pipeline_worker import PipelineWorker
 from autocam_tracker.data.recognized_vehicle_registry import RecognizedVehicleRegistry
 from autocam_tracker.detection.detection_models import VehicleDetection
 from autocam_tracker.detection.yolo26_detector import YOLO26Detector
-from autocam_tracker.framing.crop_controller import CropController
+from autocam_tracker.framing.crop_controller import CropController, CropResult
+from autocam_tracker.framing.framing_controller import FramingController
 from autocam_tracker.identity.global_identity_manager import GlobalIdentityManager
+from autocam_tracker.identity.reid_feature_extractor import RuntimeReIDFeatureExtractor
+from autocam_tracker.video.video_file_source import VideoFileSource
 from scripts import (
     auto_curate_vehicle_identity_tracks,
     build_vehicle_identity_candidates,
+    cluster_vehicle_identity_tracks,
     curate_vehicle_identity_dataset,
     export_fastreid_reid_onnx,
     prepare_fastreid_veri_dataset,
@@ -53,6 +60,53 @@ class CoreSmokeTest(unittest.TestCase):
         self.assertEqual(manager.selected_global_vehicle_id, 1)
         self.assertEqual(manager.selected_local_track_id, -1)
 
+    def test_global_identity_adopts_preassigned_gid(self) -> None:
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        detection = VehicleDetection(
+            detection_id=0,
+            local_track_id=9,
+            global_vehicle_id=12,
+            confidence=0.9,
+            bbox=(100, 80, 60, 40),
+            center=(130, 100),
+        )
+        manager = GlobalIdentityManager()
+
+        target = manager.update([detection], (0, 9), frame, 0.0, 0, 0)
+
+        self.assertIsNotNone(target)
+        self.assertEqual(manager.selected_global_vehicle_id, 12)
+        self.assertEqual(detection.global_vehicle_id, 12)
+
+    def test_global_identity_reanchors_by_registry_gid(self) -> None:
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        first = VehicleDetection(
+            detection_id=0,
+            local_track_id=9,
+            global_vehicle_id=12,
+            confidence=0.9,
+            bbox=(100, 80, 60, 40),
+            center=(130, 100),
+        )
+        manager = GlobalIdentityManager()
+        manager.update([first], (0, 9), frame, 0.0, 0, 0)
+
+        later = VehicleDetection(
+            detection_id=1,
+            local_track_id=31,
+            global_vehicle_id=12,
+            confidence=0.88,
+            reid_score=0.91,
+            reid_matched=True,
+            bbox=(150, 90, 64, 42),
+            center=(182, 111),
+        )
+        target = manager.update([later], None, frame, 33.0, 0, 1)
+
+        self.assertIs(target, later)
+        self.assertEqual(manager.selected_global_vehicle_id, 12)
+        self.assertEqual(manager.selected_local_track_id, 31)
+
     def test_crop_output_keeps_frame_shape(self) -> None:
         frame = np.zeros((240, 320, 3), dtype=np.uint8)
         target = VehicleDetection(
@@ -77,6 +131,73 @@ class CoreSmokeTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             controller._parse_screen_region("10,20,8,200")
 
+    def test_video_file_source_seek_updates_frame_position(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            import cv2
+
+            video_path = Path(tmp) / "seek_test.avi"
+            writer = cv2.VideoWriter(str(video_path), cv2.VideoWriter_fourcc(*"MJPG"), 10.0, (64, 48))
+            for index in range(6):
+                frame = np.full((48, 64, 3), index * 30, dtype=np.uint8)
+                writer.write(frame)
+            writer.release()
+
+            source = VideoFileSource(video_path)
+            source.open()
+            try:
+                self.assertGreaterEqual(source.frame_count, 6)
+                self.assertTrue(source.seek(3))
+                ok, frame = source.read()
+                self.assertTrue(ok)
+                self.assertIsNotNone(frame)
+                self.assertEqual(source.frame_index, 4)
+            finally:
+                source.release()
+
+    def test_frame_data_carries_video_timeline_metadata(self) -> None:
+        frame = np.zeros((48, 64, 3), dtype=np.uint8)
+        crop_result = CropResult(
+            frame=frame,
+            crop_x=0,
+            crop_y=0,
+            crop_w=64,
+            crop_h=48,
+            zoom_ratio=1.0,
+            zoom_error=0.0,
+            error_x=0.0,
+            error_y=0.0,
+            normalized_error_x=0.0,
+            normalized_error_y=0.0,
+        )
+
+        frame_data = FramingController().build_frame_data(
+            raw_frame=frame,
+            detection_frame=frame,
+            cropped_frame=frame,
+            detections=[],
+            camera_id=0,
+            shot_id=0,
+            frame_index=12,
+            total_frame_count=100,
+            timestamp_ms=400.0,
+            tracking_status="Detecting",
+            selected_global_vehicle_id=-1,
+            selected_local_track_id=-1,
+            selected_detection_id=-1,
+            camera_cut_detected=False,
+            fps=30.0,
+            inference_time_ms=0.0,
+            tracking_time_ms=0.0,
+            reframe_time_ms=0.0,
+            crop_result=crop_result,
+            lost_frames=0,
+            candidate_count=0,
+            reacquire_score=0.0,
+        )
+
+        self.assertEqual(frame_data.frame_index, 12)
+        self.assertEqual(frame_data.total_frame_count, 100)
+
     def test_recognized_registry_keeps_anchored_summary(self) -> None:
         detection = VehicleDetection(
             detection_id=0,
@@ -94,6 +215,154 @@ class CoreSmokeTest(unittest.TestCase):
         self.assertEqual(len(summaries), 1)
         self.assertEqual(summaries[0].registry_id, "G1")
         self.assertTrue(summaries[0].selected)
+
+    def test_recognized_registry_preserves_ids_when_runtime_state_resets(self) -> None:
+        detection = VehicleDetection(
+            detection_id=0,
+            local_track_id=7,
+            global_vehicle_id=1,
+            shot_id=2,
+            frame_index=10,
+            confidence=0.8,
+        )
+        registry = RecognizedVehicleRegistry()
+        registry.update([detection], selected_global_vehicle_id=1, tracking_status="Tracking")
+
+        registry.reset_runtime_state()
+        summaries = registry.summaries()
+
+        self.assertEqual(len(summaries), 1)
+        self.assertEqual(summaries[0].global_vehicle_id, 1)
+        self.assertFalse(summaries[0].selected)
+        self.assertEqual(summaries[0].status, "NotVisible")
+
+    def test_pipeline_seek_preserves_recognized_vehicle_registry(self) -> None:
+        class FakeSource:
+            def __init__(self) -> None:
+                self.seek_calls: list[int] = []
+
+            def seek(self, frame_index: int) -> bool:
+                self.seek_calls.append(frame_index)
+                return True
+
+        class FakeDetector:
+            def __init__(self) -> None:
+                self.reset_count = 0
+
+            def reset_tracking(self) -> None:
+                self.reset_count += 1
+
+        source = FakeSource()
+        detector = FakeDetector()
+        worker = PipelineWorker(
+            source=source,
+            detector=detector,
+            tracker_config=Path("tracker.yaml"),
+            frame_queue=queue.Queue(),
+            stop_event=threading.Event(),
+            app_config=AppConfig(model_path=Path("model.pt")),
+        )
+        detection = VehicleDetection(
+            detection_id=0,
+            local_track_id=7,
+            global_vehicle_id=1,
+            shot_id=0,
+            frame_index=10,
+            confidence=0.8,
+        )
+        worker.recognized_registry.update([detection], selected_global_vehicle_id=1, tracking_status="Tracking")
+
+        worker._seek_source(42)
+        summaries = worker.recognized_registry.summaries()
+
+        self.assertEqual(source.seek_calls, [42])
+        self.assertEqual(detector.reset_count, 1)
+        self.assertEqual(len(summaries), 1)
+        self.assertEqual(summaries[0].global_vehicle_id, 1)
+        self.assertFalse(summaries[0].selected)
+        self.assertEqual(summaries[0].status, "NotVisible")
+
+    def test_recognized_registry_assigns_gid_to_unselected_vehicle(self) -> None:
+        detection = VehicleDetection(
+            detection_id=0,
+            local_track_id=7,
+            shot_id=2,
+            frame_index=10,
+            confidence=0.8,
+        )
+        registry = RecognizedVehicleRegistry()
+
+        registry.update([detection], selected_global_vehicle_id=-1, tracking_status="Detecting")
+        summaries = registry.summaries()
+
+        self.assertEqual(len(summaries), 1)
+        self.assertEqual(summaries[0].registry_id, "G1")
+        self.assertEqual(summaries[0].global_vehicle_id, 1)
+        self.assertEqual(detection.global_vehicle_id, 1)
+        self.assertEqual(registry.local_track_aliases_for_global(1), [7])
+        self.assertEqual(registry.local_track_aliases_for_global(1, shot_id=2), [7])
+        self.assertEqual(registry.local_track_aliases_for_global(1, shot_id=3), [])
+
+    def test_recognized_registry_matches_reid_memory_across_shots(self) -> None:
+        registry = RecognizedVehicleRegistry(reid_cross_shot_threshold=0.86, reid_margin=0.02)
+        first = VehicleDetection(
+            detection_id=0,
+            local_track_id=7,
+            shot_id=0,
+            frame_index=10,
+            confidence=0.8,
+            reid_feature=np.array([1.0, 0.0], dtype=np.float32),
+        )
+        registry.update([first], selected_global_vehicle_id=-1, tracking_status="Detecting")
+
+        later = VehicleDetection(
+            detection_id=0,
+            local_track_id=3,
+            shot_id=1,
+            frame_index=200,
+            confidence=0.85,
+            reid_feature=np.array([0.99, 0.04], dtype=np.float32),
+        )
+        registry.apply_known_ids([later])
+        registry.update([later], selected_global_vehicle_id=-1, tracking_status="Detecting")
+        summaries = registry.summaries()
+
+        self.assertEqual(later.global_vehicle_id, 1)
+        self.assertTrue(later.reid_matched)
+        self.assertEqual(len(summaries), 1)
+        self.assertEqual(summaries[0].global_vehicle_id, 1)
+        self.assertEqual(summaries[0].local_track_aliases, [3])
+        self.assertGreaterEqual(summaries[0].reid_feature_count, 1)
+
+    def test_recognized_registry_keeps_small_diverse_reid_memory(self) -> None:
+        registry = RecognizedVehicleRegistry(reid_memory_size=2, reid_duplicate_similarity=0.98)
+        features = [
+            np.array([1.0, 0.0], dtype=np.float32),
+            np.array([0.999, 0.02], dtype=np.float32),
+            np.array([0.0, 1.0], dtype=np.float32),
+            np.array([-1.0, 0.0], dtype=np.float32),
+        ]
+        for index, feature in enumerate(features):
+            registry.update(
+                [
+                    VehicleDetection(
+                        detection_id=0,
+                        local_track_id=7,
+                        global_vehicle_id=1,
+                        shot_id=0,
+                        frame_index=index,
+                        confidence=0.8,
+                        reid_feature=feature,
+                    )
+                ],
+                selected_global_vehicle_id=-1,
+                tracking_status="Detecting",
+            )
+
+        summary = registry.summaries()[0]
+        self.assertEqual(summary.global_vehicle_id, 1)
+        self.assertEqual(summary.reid_feature_count, 2)
+        self.assertLessEqual(len(summary.reid_features), 2)
 
     def test_recognized_registry_merges_track_fragments_by_appearance(self) -> None:
         thumb = np.zeros((54, 96, 3), dtype=np.uint8)
@@ -125,8 +394,16 @@ class CoreSmokeTest(unittest.TestCase):
         summaries = registry.summaries()
 
         self.assertEqual(len(summaries), 1)
-        self.assertEqual(summaries[0].registry_id, "R1")
+        self.assertEqual(summaries[0].registry_id, "G1")
         self.assertEqual(summaries[0].local_track_aliases, [35, 41])
+
+    def test_runtime_reid_extractor_noops_without_model(self) -> None:
+        detection = VehicleDetection(thumbnail=np.zeros((54, 96, 3), dtype=np.uint8))
+        extractor = RuntimeReIDFeatureExtractor(Path("missing.torchscript"))
+
+        extractor.encode_detections([detection])
+
+        self.assertIsNone(detection.reid_feature)
 
     def test_app_config_loads_reid_model_path_from_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -205,6 +482,24 @@ class CoreSmokeTest(unittest.TestCase):
 
             self.assertEqual(tracker_config, tracking_dir / ".dynamic_botsort_reid.yaml")
             self.assertIn(controller.config.reid_model_path.as_posix(), tracker_config.read_text(encoding="utf-8"))
+
+    def test_default_botsort_reid_config_keeps_auto_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            tracking_dir = project_root / "autocam_tracker" / "tracking"
+            tracking_dir.mkdir(parents=True)
+            base_config = tracking_dir / "custom_botsort_reid.yaml"
+            base_config.write_text(
+                "tracker_type: botsort\nwith_reid: true\nmodel: auto\n",
+                encoding="utf-8",
+            )
+            controller = AppController(project_root=project_root)
+            controller.config.reid_model_path = project_root / "weights" / "fastreid_vehicle.onnx"
+
+            tracker_config = controller._tracker_config_path("botsort_reid_default")
+
+            self.assertEqual(tracker_config, base_config)
+            self.assertEqual("auto", base_config.read_text(encoding="utf-8").split("model:", 1)[1].strip())
 
     def test_training_script_defaults_match_optimization_plan(self) -> None:
         fastreid_args = train_fastreid.build_parser().parse_args([])
@@ -410,6 +705,84 @@ class CoreSmokeTest(unittest.TestCase):
             self.assertEqual(summary.val_count, 2)
             self.assertEqual(len(list((output_dir / "train" / "vehicle_0001").glob("*.jpg"))), 4)
             self.assertEqual(len(list((output_dir / "val" / "vehicle_0001").glob("*.jpg"))), 2)
+
+    def test_cluster_vehicle_identity_tracks_merges_similar_track_embeddings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            candidates_root = root / "datasets" / "vehicle_identity_candidates_batch"
+            output_dir = root / "datasets" / "vehicle_identity_global"
+
+            from PIL import Image
+
+            rows = []
+            for segment, track_id, frame_start, color in (
+                ("seg_000000_000060", 1, 0, (255, 0, 0)),
+                ("seg_000120_000180", 2, 120, (250, 0, 0)),
+                ("seg_000240_000300", 3, 240, (0, 0, 255)),
+            ):
+                track_dir = candidates_root / segment / "cam_000_video" / f"track_{track_id:04d}"
+                track_dir.mkdir(parents=True)
+                for index in range(5):
+                    Image.new("RGB", (32, 20), color).save(track_dir / f"frame_{frame_start + index:06d}.jpg")
+                representative_crop = track_dir / f"frame_{frame_start:06d}.jpg"
+                rows.append(
+                    f"cam_000_video,{track_id},5,{frame_start},{frame_start + 4},0.80,vehicle,{representative_crop},True\n"
+                )
+
+            for segment in ("seg_000000_000060", "seg_000120_000180", "seg_000240_000300"):
+                summary_path = candidates_root / segment / "track_summary.csv"
+                segment_rows = [
+                    row
+                    for row in rows
+                    if f"track_{int(row.split(',')[1]):04d}" in row and segment in row
+                ]
+                summary_path.write_text(
+                    "camera_name,track_id,crop_count,first_frame_index,last_frame_index,mean_confidence,label,representative_crop,keep\n"
+                    + "".join(segment_rows),
+                    encoding="utf-8",
+                )
+
+            def fake_extractor(paths: list[Path]) -> np.ndarray:
+                features = []
+                for path in paths:
+                    if "track_0001" in str(path) or "track_0002" in str(path):
+                        features.append(np.array([1.0, 0.0], dtype="float32"))
+                    else:
+                        features.append(np.array([0.0, 1.0], dtype="float32"))
+                return np.stack(features)
+
+            manual_merge_csv = root / "manual_global_identity.csv"
+            manual_merge_csv.write_text(
+                "include,global_identity_id,segment,camera_name,track_id,note\n"
+                "1,reviewed_vehicle_0001,seg_000000_000060,cam_000_video,1,\n"
+                "1,reviewed_vehicle_0001,seg_000120_000180,cam_000_video,2,\n",
+                encoding="utf-8",
+            )
+            summary = cluster_vehicle_identity_tracks.cluster_vehicle_identity_tracks(
+                candidates_root=candidates_root,
+                output_dir=output_dir,
+                model_path=None,
+                similarity_threshold=1.10,
+                min_crops=2,
+                min_mean_confidence=0.45,
+                max_crops_per_track=3,
+                max_crops_per_global_identity=5,
+                feature_crops_per_track=2,
+                val_ratio=0.33,
+                manual_merge_csv=manual_merge_csv,
+                feature_extractor=fake_extractor,
+            )
+
+            self.assertEqual(summary.selected_track_count, 3)
+            self.assertEqual(summary.global_identity_count, 2)
+            self.assertEqual(summary.crop_count, 8)
+            self.assertEqual(summary.train_count, 5)
+            self.assertEqual(summary.val_count, 3)
+            self.assertEqual(summary.max_crops_per_global_identity, 5)
+            self.assertTrue((output_dir / "train" / "reviewed_vehicle_0001").exists())
+            cluster_rows = (output_dir / "cluster_summary.csv").read_text(encoding="utf-8")
+            self.assertIn("reviewed_vehicle_0001", cluster_rows)
+            self.assertIn("global_vehicle_0001", cluster_rows)
 
     def test_prepare_yolo_dataset_from_identity_crops_writes_full_box_labels(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

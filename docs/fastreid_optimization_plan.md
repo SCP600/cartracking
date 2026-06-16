@@ -111,6 +111,32 @@ python scripts/train_fastreid.py --run --fastreid-root path/to/fast-reid --confi
 
 > 注意：Roboflow 的 YOLO detection dataset 主要提供車輛框選與類別標籤，不能直接等同於 ReID 訓練資料。FastReID 需要同一車輛身份的標籤，否則模型無法學到「同一台車」的外觀特徵。
 
+### 3.1 Global identity 候選合併
+- **腳本**：`scripts/cluster_vehicle_identity_tracks.py`
+- **用途**：將多段影片切出的 tracker candidates 以 ReID embedding 聚合，並支援 `--manual-merge-csv` 只套用人工確認過的同車 track group。
+- **建議流程**：
+```bash
+python scripts/cluster_vehicle_identity_tracks.py \
+  --candidates-root datasets/vehicle_identity_candidates_videoplayback_batch \
+  --output-dir datasets/vehicle_identity_videoplayback_global \
+  --model weights/fastreid_videoplayback_auto/fastreid_vehicle_reid.torchscript \
+  --similarity-threshold 0.90 \
+  --manual-merge-csv datasets/vehicle_identity_videoplayback_manual_global_merge.csv \
+  --clear-output
+```
+- **重要原則**：低門檻自動合併容易把外觀相近但不同的車放進同一個 identity；寧可少合併，也不要把錯誤正樣本放進 FastReID 訓練。
+- **Warm-start 訓練**：若已有上一版影片 ReID checkpoint，可用 `--init-weights` 接續微調：
+```bash
+python scripts/train_fastreid.py --run \
+  --fastreid-root external/fastreid \
+  --config-file configs/fastreid/vehicle_bootstrap_bagtricks.yml \
+  --fastreid-datasets-root datasets/fastreid_videoplayback_global \
+  --data_dir datasets/vehicle_identity_videoplayback_global/train \
+  --output_dir weights/fastreid_videoplayback_global_warmstart \
+  --init-weights weights/fastreid_videoplayback_auto/model_best.pth \
+  --batch_size 32 --epochs 10 --device cuda:0
+```
+
 ### 4. App 端套用自訂 ReID 權重
 - **設定檔**：`autocam_tracker/config/default_config.json`
 - **Runtime 行為**：當 `tracker` 為 `botsort_reid` 且 `reid_model_path` 有值時，`AppController` 會動態產生 `.dynamic_botsort_reid.yaml`，把 BoT-SORT ReID 的 `model` 指向自訂權重。

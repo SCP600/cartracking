@@ -69,9 +69,21 @@ class AppController:
         if self.worker is not None:
             self.worker.request_target_reset()
 
+    def reset_cropped(self) -> None:
+        if self.worker is not None:
+            self.worker.request_crop_reset()
+
     def select_detection(self, detection_id: int, local_track_id: int = -1) -> None:
         if self.worker is not None:
             self.worker.request_target_selection(detection_id, local_track_id)
+
+    def select_global_vehicle(self, global_vehicle_id: int, local_track_id: int = -1) -> None:
+        if self.worker is not None:
+            self.worker.request_target_selection(-1, local_track_id, global_vehicle_id, focus_crop=True)
+
+    def seek_frame(self, frame_index: int) -> None:
+        if self.worker is not None:
+            self.worker.request_seek(frame_index)
 
     def poll_frame(self):
         latest = None
@@ -84,7 +96,7 @@ class AppController:
 
     def _tracker_config_path(self, tracker_name: str) -> Path:
         name = tracker_name.lower().strip()
-        if name == "botsort_reid":
+        if name in {"botsort_reid", "botsort_reid_custom", "botsort_reid_self_trained"}:
             base_config = self.project_root / "autocam_tracker" / "tracking" / "custom_botsort_reid.yaml"
             if self.config.reid_model_path:
                 try:
@@ -97,6 +109,8 @@ class AppController:
                 except Exception as e:
                     print(f"Warning: Failed to create dynamic tracker config: {e}")
             return base_config
+        if name in {"botsort_reid_default", "botsort_reid_auto"}:
+            return self.project_root / "autocam_tracker" / "tracking" / "custom_botsort_reid.yaml"
         if name == "bytetrack":
             return self.project_root / "autocam_tracker" / "tracking" / "custom_bytetrack.yaml"
         return self.project_root / "autocam_tracker" / "tracking" / "custom_botsort.yaml"

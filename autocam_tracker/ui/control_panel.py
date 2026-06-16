@@ -9,15 +9,27 @@ from autocam_tracker.ui.screen_region_selector import ScreenRegionSelector
 
 
 class ControlPanel(ttk.Frame):
-    def __init__(self, master, on_start, on_stop, on_reset, on_source_preview=None, default_tracker: str = "botsort_reid") -> None:
+    def __init__(
+        self,
+        master,
+        on_start,
+        on_stop,
+        on_reset,
+        on_reset_cropped,
+        on_source_preview=None,
+        default_tracker: str = "botsort_reid",
+    ) -> None:
         super().__init__(master)
         self.on_start = on_start
         self.on_stop = on_stop
         self.on_reset = on_reset
+        self.on_reset_cropped = on_reset_cropped
         self.on_source_preview = on_source_preview
         self.source = SourceConfig(kind="webcam", value="0")
         self.source_text = tk.StringVar(value="Webcam 0")
-        self.tracker = tk.StringVar(value=default_tracker)
+        self.tracker_values = ("botsort", "botsort_reid_default", "botsort_reid_custom", "bytetrack")
+        tracker_value = default_tracker if default_tracker in self.tracker_values else "botsort_reid_custom"
+        self.tracker = tk.StringVar(value=tracker_value)
         self._build()
 
     def _build(self) -> None:
@@ -29,14 +41,15 @@ class ControlPanel(ttk.Frame):
         tracker_select = ttk.Combobox(
             self,
             textvariable=self.tracker,
-            values=("botsort", "botsort_reid", "bytetrack"),
-            width=13,
+            values=self.tracker_values,
+            width=22,
             state="readonly",
         )
         tracker_select.pack(side="left")
         ttk.Button(self, text="Start", command=self._start).pack(side="left", padx=4)
         ttk.Button(self, text="Stop", command=self.on_stop).pack(side="left", padx=4)
         ttk.Button(self, text="Reset Target", command=self.on_reset).pack(side="left", padx=4)
+        ttk.Button(self, text="Reset Cropped", command=self.on_reset_cropped).pack(side="left", padx=4)
 
     def _open_file(self) -> None:
         path = filedialog.askopenfilename(
