@@ -41,11 +41,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     fastreid_root = Path(args.fastreid_root).resolve()
-    sys.path.insert(0, str(fastreid_root))
+    sys.path.insert(0, str(fastreid_root.parent))
 
-    from fastreid.config import get_cfg
-    from fastreid.modeling.meta_arch import build_model
-    from fastreid.utils.checkpoint import Checkpointer
+    from fast_reid.fastreid.config import get_cfg
+    from fast_reid.fastreid.modeling.meta_arch import build_model
+    from fast_reid.fastreid.utils.checkpoint import Checkpointer
 
     config_file = Path(args.config_file).resolve()
     weights = Path(args.weights).resolve()

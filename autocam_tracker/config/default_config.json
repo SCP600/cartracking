@@ -1,16 +1,16 @@
 {
-  "model_path": "runs/train/yolo_vehicle_detector_gpu_640/weights/best.pt",
+  "model_path": "yolov8n.pt",
   "reid_model_path": "weights/fastreid_videoplayback_global_warmstart/fastreid_vehicle_reid.torchscript",
-  "vehicle_class_ids": null,
+  "vehicle_class_ids": [2, 3, 5, 7],
   "conf": 0.15,
   "imgsz": 640,
-  "device": 0,
+  "device": "cpu",
   "camera_id": 0,
   "tracker": "botsort_reid_custom",
   "crop_max_zoom": 2.5,
   "gid_reid_memory_size": 24,
-  "gid_reid_match_threshold": 0.82,
-  "gid_reid_cross_shot_threshold": 0.86,
-  "gid_reid_margin": 0.04,
+  "gid_reid_match_threshold": 0.73,
+  "gid_reid_cross_shot_threshold": 0.75,
+  "gid_reid_margin": 0.01,
   "gid_reid_duplicate_similarity": 0.985
 }
