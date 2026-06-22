@@ -32,26 +32,29 @@ class RecognizedVehicleRegistry:
         self.reid_duplicate_similarity = reid_duplicate_similarity
 
     def apply_known_ids(self, detections: list[VehicleDetection]) -> None:
+        assigned_keys: set[str] = set()
         for detection in detections:
             if detection.global_vehicle_id >= 0:
                 self._reserve_global_id(detection.global_vehicle_id)
+                assigned_keys.add(f"G{detection.global_vehicle_id}")
                 continue
             signature = self._color_signature(detection)
             key = self._find_by_track_alias(detection)
-            if key is None:
-                key, _ = self._find_appearance_match(detection, signature)
-            if key is None:
+            if key is None or key in assigned_keys:
+                key, _ = self._find_appearance_match(detection, signature, exclude_keys=assigned_keys)
+            if key is None or key in assigned_keys:
                 continue
             item = self._items.get(key)
             if item is not None and item.global_vehicle_id >= 0:
                 detection.global_vehicle_id = item.global_vehicle_id
+                assigned_keys.add(key)
 
     def update(self, detections: list[VehicleDetection], selected_global_vehicle_id: int, tracking_status: str) -> None:
         seen_this_frame: set[str] = set()
         for detection in detections:
             key = self._key(detection)
             signature = self._color_signature(detection)
-            key, match_score = self._resolve_key(detection, key, signature)
+            key, match_score = self._resolve_key(detection, key, signature, exclude_keys=seen_this_frame)
             seen_this_frame.add(key)
             if key not in self._items:
                 self._items[key] = RecognizedVehicleSummary(
@@ -141,19 +144,26 @@ class RecognizedVehicleRegistry:
         detection: VehicleDetection,
         preferred_key: str,
         signature: np.ndarray | None,
+        exclude_keys: set[str] | None = None,
     ) -> tuple[str, float]:
-        if preferred_key:
+        if exclude_keys is None:
+            exclude_keys = set()
+
+        if preferred_key and preferred_key not in exclude_keys:
             return preferred_key, 1.0
 
         track_key = self._find_by_track_alias(detection)
-        if track_key is not None:
+        if track_key is not None and track_key not in exclude_keys:
             return track_key, 1.0
 
-        match_key, score = self._find_appearance_match(detection, signature)
+        match_key, score = self._find_appearance_match(detection, signature, exclude_keys)
         if match_key is not None:
             return match_key, score
 
-        return self._new_global_key(), 0.0
+        new_key = self._new_global_key()
+        while new_key in exclude_keys:
+            new_key = self._new_global_key()
+        return new_key, 0.0
 
     def local_track_aliases_for_global(self, global_vehicle_id: int, shot_id: int | None = None) -> list[int]:
         for item in self._items.values():
@@ -178,11 +188,16 @@ class RecognizedVehicleRegistry:
         self,
         detection: VehicleDetection,
         signature: np.ndarray | None,
+        exclude_keys: set[str] | None = None,
     ) -> tuple[str | None, float]:
-        reid_key, reid_score = self._find_reid_match(detection)
+        if exclude_keys is None:
+            exclude_keys = set()
+        reid_key, reid_score = self._find_reid_match(detection, exclude_keys)
         best_key = reid_key
         best_score = reid_score if reid_key is not None else 0.0
         for key, item in self._items.items():
+            if key in exclude_keys:
+                continue
             if item.shot_id != detection.shot_id:
                 continue
             if detection.frame_index - item.last_frame_index > self.max_merge_gap_frames:
@@ -211,13 +226,17 @@ class RecognizedVehicleRegistry:
             return 0.42 * reid + 0.30 * color + 0.13 * size + 0.08 * motion + 0.07 * confidence
         return 0.50 * color + 0.22 * size + 0.18 * motion + 0.10 * confidence
 
-    def _find_reid_match(self, detection: VehicleDetection) -> tuple[str | None, float]:
+    def _find_reid_match(self, detection: VehicleDetection, exclude_keys: set[str] | None = None) -> tuple[str | None, float]:
+        if exclude_keys is None:
+            exclude_keys = set()
         feature = self._normalized_reid_feature(detection)
         if feature is None:
             return None, 0.0
 
         scored: list[tuple[float, float, str]] = []
         for key, item in self._items.items():
+            if key in exclude_keys:
+                continue
             if not item.reid_features:
                 continue
             if item.shot_id == detection.shot_id and item.last_frame_index == detection.frame_index:

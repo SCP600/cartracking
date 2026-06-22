@@ -18,11 +18,21 @@ class TimelinePanel(ttk.Frame):
 
     def _build(self) -> None:
         ttk.Label(self, text="Timeline").pack(side="left", padx=(0, 6))
+        
+        self.btn_back = ttk.Button(self, text="<< -300", width=8, command=lambda: self._seek_offset(-300))
+        self.btn_back.pack(side="left", padx=(0, 4))
+        self.btn_back.state(["disabled"])
+
         self.scale = ttk.Scale(self, from_=0, to=0, variable=self.position)
         self.scale.pack(side="left", fill="x", expand=True)
         self.scale.state(["disabled"])
         self.scale.bind("<ButtonPress-1>", self._on_press)
         self.scale.bind("<ButtonRelease-1>", self._on_release)
+
+        self.btn_fwd = ttk.Button(self, text="+300 >>", width=8, command=lambda: self._seek_offset(300))
+        self.btn_fwd.pack(side="left", padx=(4, 0))
+        self.btn_fwd.state(["disabled"])
+
         ttk.Label(self, textvariable=self.label_text, width=28).pack(side="left", padx=(8, 0))
 
     def update_timeline(self, frame_data: FrameData) -> None:
@@ -31,6 +41,8 @@ class TimelinePanel(ttk.Frame):
             self._max_frame = 0
             self.scale.configure(to=0)
             self.scale.state(["disabled"])
+            self.btn_back.state(["disabled"])
+            self.btn_fwd.state(["disabled"])
             self.label_text.set("Timeline unavailable")
             return
 
@@ -39,6 +51,8 @@ class TimelinePanel(ttk.Frame):
             self._max_frame = max_frame
             self.scale.configure(to=max_frame)
         self.scale.state(["!disabled"])
+        self.btn_back.state(["!disabled"])
+        self.btn_fwd.state(["!disabled"])
 
         current = max(0, min(int(frame_data.frame_index), max_frame))
         if not self._dragging:
@@ -57,3 +71,11 @@ class TimelinePanel(ttk.Frame):
         frame_index = max(0, min(int(round(self.position.get())), self._max_frame))
         self.position.set(frame_index)
         self.on_seek(frame_index)
+
+    def _seek_offset(self, offset: int) -> None:
+        if self._max_frame <= 0:
+            return
+        current = int(round(self.position.get()))
+        target = max(0, min(current + offset, self._max_frame))
+        self.position.set(target)
+        self.on_seek(target)
