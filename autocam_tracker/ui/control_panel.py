@@ -55,7 +55,7 @@ class ControlPanel(ttk.Frame):
             state="readonly",
         )
         speed_select.pack(side="left")
-        speed_select.current(3)  # default 1.0x
+        speed_select.current(2)  # default 1.0x
         speed_select.bind("<<ComboboxSelected>>", self._on_speed_select)
         
         ttk.Button(self, text="Help / Controls", command=self._show_help).pack(side="left", padx=4)
@@ -93,7 +93,7 @@ class ControlPanel(ttk.Frame):
             self.on_source_preview(self.source)
 
     def _start(self) -> None:
-        self.on_start(self.source, "botsort_reid_custom")
+        self.on_start(self.source, self.tracker.get())
 
     def _on_speed_select(self, event) -> None:
         if self.on_speed_change:

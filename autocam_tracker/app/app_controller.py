@@ -88,16 +88,24 @@ class AppController:
 
     def select_global_vehicle(self, global_vehicle_id: int, local_track_id: int = -1) -> None:
         if self.worker is not None:
-            self.worker.request_target_selection(local_track_id)
-            if global_vehicle_id == -1:
+            if local_track_id != -1:
+                self.worker.request_target_selection(
+                    detection_id=-1,
+                    local_track_id=local_track_id,
+                    global_vehicle_id=global_vehicle_id,
+                )
+            elif global_vehicle_id == -1:
                 self.worker.request_target_binding(-1)
             else:
                 self.worker.request_track_gid(global_vehicle_id)
 
     def add_feature_to_gid(self, global_vehicle_id: int, local_track_id: int) -> None:
         if self.worker is not None:
-            self.worker.request_target_selection(local_track_id)
-            self.worker.request_target_binding(global_vehicle_id)
+            self.worker.request_target_selection(
+                detection_id=-1,
+                local_track_id=local_track_id,
+                global_vehicle_id=global_vehicle_id,
+            )
 
     def track_global_vehicle(self, global_vehicle_id: int) -> None:
         if self.worker is not None:
