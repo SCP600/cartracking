@@ -93,7 +93,7 @@ class CropController:
         )
 
     def _desired_zoom(self, target_area_ratio: float) -> float:
-        desired_ratio = 0.08
+        desired_ratio = 0.15  # Aim for 1/8 to 1/4 of the view
         if target_area_ratio <= 0:
             return 1.0
         zoom = (desired_ratio / target_area_ratio) ** 0.5

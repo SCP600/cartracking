@@ -1,9 +1,9 @@
 {
-  "model_path": "yolov8n.pt",
+  "model_path": "yolo11n.pt",
   "reid_model_path": "weights/fastreid_videoplayback_global_warmstart/fastreid_vehicle_reid.torchscript",
   "vehicle_class_ids": [2, 3, 5, 7],
   "conf": 0.15,
-  "imgsz": 640,
+  "imgsz": 480,
   "device": "cpu",
   "camera_id": 0,
   "tracker": "botsort_reid_custom",

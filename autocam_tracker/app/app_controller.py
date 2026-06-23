@@ -65,6 +65,11 @@ class AppController:
         self.worker = None
         self.stop_event = None
 
+    def toggle_pause(self) -> bool:
+        if self.worker is not None:
+            return self.worker.toggle_pause()
+        return False
+
     def reset_target(self) -> None:
         if self.worker is not None:
             self.worker.request_target_reset()
@@ -73,17 +78,38 @@ class AppController:
         if self.worker is not None:
             self.worker.request_crop_reset()
 
+    def reset_anchor_db(self) -> None:
+        if self.worker is not None:
+            self.worker.request_db_reset()
+
     def select_detection(self, detection_id: int, local_track_id: int = -1) -> None:
         if self.worker is not None:
             self.worker.request_target_selection(detection_id, local_track_id)
 
     def select_global_vehicle(self, global_vehicle_id: int, local_track_id: int = -1) -> None:
         if self.worker is not None:
-            self.worker.request_target_selection(-1, local_track_id, global_vehicle_id, focus_crop=True)
+            self.worker.request_target_selection(local_track_id)
+            if global_vehicle_id == -1:
+                self.worker.request_target_binding(-1)
+            else:
+                self.worker.request_track_gid(global_vehicle_id)
+
+    def add_feature_to_gid(self, global_vehicle_id: int, local_track_id: int) -> None:
+        if self.worker is not None:
+            self.worker.request_target_selection(local_track_id)
+            self.worker.request_target_binding(global_vehicle_id)
+
+    def track_global_vehicle(self, global_vehicle_id: int) -> None:
+        if self.worker is not None:
+            self.worker.request_track_gid(global_vehicle_id)
 
     def seek_frame(self, frame_index: int) -> None:
         if self.worker is not None:
             self.worker.request_seek(frame_index)
+
+    def set_playback_speed(self, speed: float) -> None:
+        if self.worker is not None:
+            self.worker.request_playback_speed(speed)
 
     def poll_frame(self):
         latest = None
