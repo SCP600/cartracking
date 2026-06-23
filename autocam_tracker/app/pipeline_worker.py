@@ -81,6 +81,10 @@ class PipelineWorker(threading.Thread):
             else:
                 self._select_request = local_track_id
 
+    def request_target_binding(self, global_vehicle_id: int = -1) -> None:
+        with self._lock:
+            self._bind_request = global_vehicle_id
+
     def request_target_reset(self) -> None:
         with self._lock:
             self._reset_request = True

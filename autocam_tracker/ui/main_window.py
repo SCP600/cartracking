@@ -61,7 +61,7 @@ class MainWindow:
         bottom = ttk.Frame(main)
         bottom.pack(side="top", fill="both", expand=True, pady=(8, 0))
 
-        self.anchor_db_panel = AnchorDBPanel(bottom)
+        self.anchor_db_panel = AnchorDBPanel(bottom, on_track_gid=self.controller.track_global_vehicle)
         self.anchor_db_panel.pack(side="left", fill="both", expand=True, padx=(0, 4))
 
         self.status_panel = StatusPanel(bottom)
