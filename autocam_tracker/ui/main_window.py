@@ -7,12 +7,10 @@ from tkinter import messagebox, ttk
 from autocam_tracker.app.app_controller import AppController
 from autocam_tracker.app.app_state import SourceConfig
 from autocam_tracker.ui.control_panel import ControlPanel
-from autocam_tracker.ui.global_identity_list_panel import GlobalIdentityListPanel
+from autocam_tracker.ui.anchor_db_panel import AnchorDBPanel
 from autocam_tracker.ui.live_view_panel import LiveViewPanel
-from autocam_tracker.ui.recognized_vehicle_list_panel import RecognizedVehicleListPanel
 from autocam_tracker.ui.status_panel import StatusPanel
 from autocam_tracker.ui.timeline_panel import TimelinePanel
-from autocam_tracker.ui.vehicle_list_panel import VehicleListPanel
 from autocam_tracker.video.screen_region_source import capture_screen_region_once
 
 
@@ -27,6 +25,7 @@ class MainWindow:
 
     def run(self) -> None:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.root.bind("<space>", lambda event: self._toggle_pause())
         self.root.after(50, self._poll)
         self.root.mainloop()
 
@@ -34,11 +33,14 @@ class MainWindow:
         self.control_panel = ControlPanel(
             self.root,
             on_start=self._start,
-            on_stop=self.controller.stop,
+            on_toggle_pause=self._toggle_pause,
+            on_restart_video=lambda: self.controller.seek_frame(0),
             on_reset=self.controller.reset_target,
             on_reset_cropped=self.controller.reset_cropped,
+            on_reset_db=self.controller.reset_anchor_db,
             on_source_preview=self._preview_source,
             default_tracker=self.controller.config.tracker,
+            on_speed_change=self.controller.set_playback_speed,
         )
         self.control_panel.pack(fill="x", padx=8, pady=8)
 
@@ -48,7 +50,7 @@ class MainWindow:
         views = ttk.Frame(main)
         views.pack(side="top", fill="both", expand=True)
 
-        self.raw_view = LiveViewPanel(views, "Raw / Detection View", (660, 380))
+        self.raw_view = LiveViewPanel(views, "Raw / Detection View", (660, 380), on_click=self._on_raw_view_click, on_right_click=self._on_raw_view_right_click)
         self.raw_view.pack(side="left", fill="both", expand=True, padx=(0, 4))
         self.crop_view = LiveViewPanel(views, "Cropped / Output View", (660, 380))
         self.crop_view.pack(side="left", fill="both", expand=True, padx=(4, 0))
@@ -59,15 +61,8 @@ class MainWindow:
         bottom = ttk.Frame(main)
         bottom.pack(side="top", fill="both", expand=True, pady=(8, 0))
 
-        lists = ttk.Notebook(bottom)
-        lists.pack(side="left", fill="both", expand=True, padx=(0, 4))
-
-        self.vehicle_list = VehicleListPanel(lists, on_select=self.controller.select_detection)
-        self.gid_list = GlobalIdentityListPanel(lists, on_select=self.controller.select_global_vehicle)
-        self.recognized_list = RecognizedVehicleListPanel(lists)
-        lists.add(self.vehicle_list, text="Current Detections")
-        lists.add(self.gid_list, text="GID Anchors")
-        lists.add(self.recognized_list, text="Recognized")
+        self.anchor_db_panel = AnchorDBPanel(bottom)
+        self.anchor_db_panel.pack(side="left", fill="both", expand=True, padx=(0, 4))
 
         self.status_panel = StatusPanel(bottom)
         self.status_panel.pack(side="left", fill="y", padx=(4, 0))
@@ -75,8 +70,13 @@ class MainWindow:
     def _start(self, source: SourceConfig, tracker_name: str) -> None:
         try:
             self.controller.start(source, tracker_name)
+            self.control_panel.update_pause_button(False)
         except Exception as exc:
             messagebox.showerror("Start failed", str(exc))
+
+    def _toggle_pause(self) -> None:
+        is_paused = self.controller.toggle_pause()
+        self.control_panel.update_pause_button(is_paused)
 
     def _preview_source(self, source: SourceConfig) -> None:
         if source.kind != "screen":
@@ -93,14 +93,103 @@ class MainWindow:
     def _poll(self) -> None:
         frame_data = self.controller.poll_frame()
         if frame_data is not None:
+            self.last_frame_data = frame_data
             self.raw_view.update_frame(frame_data.detection_frame)
             self.crop_view.update_frame(frame_data.cropped_frame)
-            self.vehicle_list.update_detections(frame_data.detections)
-            self.gid_list.update_vehicles(frame_data.recognized_vehicles)
-            self.recognized_list.update_vehicles(frame_data.recognized_vehicles)
+            if hasattr(frame_data, "anchor_db_state"):
+                self.anchor_db_panel.update_db_view(frame_data.anchor_db_state)
             self.status_panel.update_status(frame_data)
             self.timeline_panel.update_timeline(frame_data)
         self.root.after(50, self._poll)
+
+    def _on_raw_view_click(self, event) -> None:
+        if not hasattr(self, "last_frame_data") or self.last_frame_data is None:
+            return
+            
+        is_shift = (event.state & 0x0001) != 0
+        is_ctrl = (event.state & 0x0004) != 0
+        x, y = event.x, event.y
+            
+        frame_data = self.last_frame_data
+        detections = frame_data.detections
+        if not detections:
+            return
+            
+        orig_h, orig_w = frame_data.detection_frame.shape[:2]
+        
+        scale = min(self.raw_view.image_size[0] / orig_w, self.raw_view.image_size[1] / orig_h)
+        scaled_w = int(orig_w * scale)
+        scaled_h = int(orig_h * scale)
+        
+        label_w = self.raw_view.label.winfo_width()
+        label_h = self.raw_view.label.winfo_height()
+        
+        offset_x = (label_w - scaled_w) // 2
+        offset_y = (label_h - scaled_h) // 2
+        
+        if offset_x <= x <= offset_x + scaled_w and offset_y <= y <= offset_y + scaled_h:
+            orig_x = (x - offset_x) / scale
+            orig_y = (y - offset_y) / scale
+            
+            for d in detections:
+                bx, by, bw, bh = d.bbox
+                if bx <= orig_x <= bx + bw and by <= orig_y <= by + bh:
+                    if is_shift:
+                        self.controller.select_global_vehicle(global_vehicle_id=-1, local_track_id=d.local_track_id)
+                    elif is_ctrl:
+                        gid = self.controller.worker.identity_manager.selected_global_vehicle_id if self.controller.worker else -1
+                        if gid == -1:
+                            gid = self.anchor_db_panel.get_selected_gid()
+                        if gid != -1:
+                            self.controller.add_feature_to_gid(gid, d.local_track_id)
+                        else:
+                            self.controller.select_detection(detection_id=d.detection_id, local_track_id=d.local_track_id)
+                    else:
+                        self.controller.select_detection(detection_id=d.detection_id, local_track_id=d.local_track_id)
+                    break
+
+    def _on_raw_view_right_click(self, event) -> None:
+        if not hasattr(self, "last_frame_data") or self.last_frame_data is None:
+            return
+            
+        frame_data = self.last_frame_data
+        detections = frame_data.detections
+        if not detections:
+            return
+            
+        orig_h, orig_w = frame_data.detection_frame.shape[:2]
+        
+        scale = min(self.raw_view.image_size[0] / orig_w, self.raw_view.image_size[1] / orig_h)
+        scaled_w = int(orig_w * scale)
+        scaled_h = int(orig_h * scale)
+        
+        label_w = self.raw_view.label.winfo_width()
+        label_h = self.raw_view.label.winfo_height()
+        
+        offset_x = (label_w - scaled_w) // 2
+        offset_y = (label_h - scaled_h) // 2
+        x, y = event.x, event.y
+        
+        if offset_x <= x <= offset_x + scaled_w and offset_y <= y <= offset_y + scaled_h:
+            orig_x = (x - offset_x) / scale
+            orig_y = (y - offset_y) / scale
+            
+            for d in detections:
+                bx, by, bw, bh = d.bbox
+                if bx <= orig_x <= bx + bw and by <= orig_y <= by + bh:
+                    menu = tk.Menu(self.root, tearoff=0)
+                    menu.add_command(label="[+] Bind as New Target", command=lambda local_id=d.local_track_id: self.controller.select_global_vehicle(-1, local_id))
+                    menu.add_separator()
+                    
+                    active_gids = []
+                    if hasattr(frame_data, "anchor_db_state"):
+                        active_gids = list(frame_data.anchor_db_state.keys())
+                        
+                    for gid in active_gids:
+                        menu.add_command(label=f"Add feature to G{gid}", command=lambda gid=gid, local_id=d.local_track_id: self.controller.add_feature_to_gid(gid, local_id))
+                        
+                    menu.post(event.x_root, event.y_root)
+                    break
 
     def _on_close(self) -> None:
         self.controller.stop()

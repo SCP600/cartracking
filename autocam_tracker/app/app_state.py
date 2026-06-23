@@ -34,7 +34,7 @@ class AppConfig:
             with open(config_path, "r", encoding="utf-8") as file:
                 raw = json.load(file)
 
-        model_path = _resolve_optional_path(project_root, raw.get("model_path")) or project_root / "yolo26n.pt"
+        model_path = _resolve_optional_path(project_root, raw.get("model_path")) or project_root / "yolo11n.pt"
         reid_model_path = _resolve_optional_path(project_root, raw.get("reid_model_path"))
         return cls(
             model_path=model_path,
