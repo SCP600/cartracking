@@ -67,7 +67,7 @@ class HierarchicalAnchorDatabase:
             if track_id == current_local_track_id:
                 current_score = score
 
-            if score > best_score:
+            if score > best_score or (score == best_score and track_id == current_local_track_id):
                 best_score = score
                 best_track_id = track_id
 
