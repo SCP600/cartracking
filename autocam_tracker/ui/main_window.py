@@ -25,7 +25,11 @@ class MainWindow:
 
     def run(self) -> None:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.root.bind("<space>", lambda event: self._toggle_pause())
+        
+        # Unbind space from buttons so it exclusively acts as a global play/pause toggle
+        self.root.unbind_class("TButton", "<space>")
+        self.root.unbind_class("Button", "<space>")
+        self.root.bind_all("<space>", lambda event: self._toggle_pause())
         self.root.after(50, self._poll)
         self.root.mainloop()
 

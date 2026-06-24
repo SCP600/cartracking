@@ -21,17 +21,15 @@ class AnchorDBPanel(ttk.Frame):
         self.tree.column("#0", width=150)
         self.tree.column("status", width=80)
         self.tree.pack(side="top", fill="both", expand=True, padx=5, pady=5)
-        self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+        self.tree.bind("<ButtonRelease-1>", self._on_tree_select)
         
         self.active_gids = set()
-        self._is_updating = False
 
     def update_db_view(self, db_state: dict):
         """
         Updates the treeview with current DB state.
         db_state format: { gid: {"label": str, "shots": [shot_id, ...]} }
         """
-        self._is_updating = True
         try:
             # Clear old items not in db
             for item in self.tree.get_children():
@@ -66,7 +64,7 @@ class AnchorDBPanel(ttk.Frame):
                     else:
                         self.tree.item(child_id, text=shot_text)
         finally:
-            self._is_updating = False
+            pass
 
     def get_selected_gid(self) -> int:
         selection = self.tree.selection()
@@ -80,7 +78,7 @@ class AnchorDBPanel(ttk.Frame):
         return -1
 
     def _on_tree_select(self, event):
-        if not self.on_track_gid or self._is_updating:
+        if not self.on_track_gid:
             return
         # Use after idle to prevent UI block if multiple selections happen fast
         gid = self.get_selected_gid()

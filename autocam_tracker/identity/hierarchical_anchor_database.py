@@ -31,10 +31,12 @@ class HierarchicalAnchorDatabase:
         target_global_id: int,
         current_local_track_id: int,
         local_track_ids: list[int],
+        min_similarity: float = 0.55,
+        top_k: int = 2,
     ) -> int:
         """
         Returns the best matching local_track_id for the target_global_id in the given shot.
-        If no one passes, or no anchors exist, returns -1.
+        If no one passes the min_similarity, or no anchors exist, returns -1.
         Uses hysteresis_margin to prevent flickering.
         """
         if not candidate_features or not local_track_ids:
@@ -61,21 +63,32 @@ class HierarchicalAnchorDatabase:
             if feat is None:
                 continue
             
-            # Score against all anchors, take the max
-            score = max(float(np.dot(feat, a.T)) for a in anchors)
+            # Score against all anchors
+            raw_scores = [float(np.dot(feat, a.T)) for a in anchors]
+            if not raw_scores:
+                continue
+                
+            # Top-K Average to reduce outlier sensitivity
+            raw_scores.sort(reverse=True)
+            k = min(top_k, len(raw_scores))
+            score = sum(raw_scores[:k]) / k
+
+            # Require minimum similarity
+            if score < min_similarity:
+                continue
 
             if track_id == current_local_track_id:
                 current_score = score
 
-            if score > best_score or (score == best_score and track_id == current_local_track_id):
+            if score > best_score + 1e-5 or (abs(score - best_score) <= 1e-5 and track_id == current_local_track_id):
                 best_score = score
                 best_track_id = track_id
 
         if best_track_id == -1:
-            return current_local_track_id
+            return current_local_track_id if current_local_track_id != -1 and current_score >= min_similarity else -1
 
         # Hysteresis Transfer
-        if current_local_track_id != -1 and current_score != -1.0:
+        if current_local_track_id != -1 and current_score >= min_similarity:
             if best_track_id != current_local_track_id:
                 if best_score > current_score + self.hysteresis_margin:
                     return best_track_id
