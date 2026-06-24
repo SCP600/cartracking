@@ -21,7 +21,7 @@ class AnchorDBPanel(ttk.Frame):
         self.tree.column("#0", width=150)
         self.tree.column("status", width=80)
         self.tree.pack(side="top", fill="both", expand=True, padx=5, pady=5)
-        self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+        self.tree.bind("<ButtonRelease-1>", self._on_tree_select)
         
         self.active_gids = set()
 
@@ -30,38 +30,41 @@ class AnchorDBPanel(ttk.Frame):
         Updates the treeview with current DB state.
         db_state format: { gid: {"label": str, "shots": [shot_id, ...]} }
         """
-        # Clear old items not in db
-        for item in self.tree.get_children():
-            if item.startswith("GID_"):
-                gid = int(item.split("_")[1])
-                if gid not in db_state:
-                    self.tree.delete(item)
+        try:
+            # Clear old items not in db
+            for item in self.tree.get_children():
+                if item.startswith("GID_"):
+                    gid = int(item.split("_")[1])
+                    if gid not in db_state:
+                        self.tree.delete(item)
 
-        # Update existing or add new
-        for gid, info in db_state.items():
-            item_id = f"GID_{gid}"
-            label = info.get("label", "car")
-            total = info.get("total_features", 0)
-            display_text = f"{label} G{gid} ({total} Feat)"
-            shots = info.get("shots", {})
-            
-            if not self.tree.exists(item_id):
-                self.tree.insert("", "end", iid=item_id, text=display_text, open=True)
-            else:
-                self.tree.item(item_id, text=display_text)
+            # Update existing or add new
+            for gid, info in db_state.items():
+                item_id = f"GID_{gid}"
+                label = info.get("label", "car")
+                total = info.get("total_features", 0)
+                display_text = f"{label} G{gid} ({total} Feat)"
+                shots = info.get("shots", {})
                 
-            # Update shots children
-            existing_shots = set()
-            for child in self.tree.get_children(item_id):
-                existing_shots.add(int(child.split("_")[-1]))
-                
-            for shot_id, count in shots.items():
-                child_id = f"{item_id}_shot_{shot_id}"
-                shot_text = f"Shot {shot_id} [{count}]"
-                if shot_id not in existing_shots:
-                    self.tree.insert(item_id, "end", iid=child_id, text=shot_text, values=("Anchored",))
+                if not self.tree.exists(item_id):
+                    self.tree.insert("", "end", iid=item_id, text=display_text, open=True)
                 else:
-                    self.tree.item(child_id, text=shot_text)
+                    self.tree.item(item_id, text=display_text)
+                    
+                # Update shots children
+                existing_shots = set()
+                for child in self.tree.get_children(item_id):
+                    existing_shots.add(int(child.split("_")[-1]))
+                    
+                for shot_id, count in shots.items():
+                    child_id = f"{item_id}_shot_{shot_id}"
+                    shot_text = f"Shot {shot_id} [{count}]"
+                    if shot_id not in existing_shots:
+                        self.tree.insert(item_id, "end", iid=child_id, text=shot_text, values=("Anchored",))
+                    else:
+                        self.tree.item(child_id, text=shot_text)
+        finally:
+            pass
 
     def get_selected_gid(self) -> int:
         selection = self.tree.selection()

@@ -228,8 +228,8 @@ class PipelineWorker(threading.Thread):
             else:
                 force_reid = False
                 
-            # --- Performance Optimization: Only extract ReID when binding or doing periodic 15-frame refresh ---
-            is_periodic_refresh = frame_index % 15 == 0 and self.identity_manager.selected_global_vehicle_id != -1
+            # --- Performance Optimization: Only extract ReID when binding or doing periodic 30-frame refresh ---
+            is_periodic_refresh = frame_index % 30 == 0 and self.identity_manager.selected_global_vehicle_id != -1
             
             need_reid = force_reid
             if bind_request is not None:

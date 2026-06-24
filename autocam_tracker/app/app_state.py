@@ -12,7 +12,7 @@ class AppConfig:
     vehicle_class_ids: list[int] | None = None
     tracker: str = "botsort_reid"
     conf: float = 0.15
-    imgsz: int = 960
+    imgsz: int = 640
     device: int | str | None = None
     camera_id: int = 0
     max_queue_size: int = 1
@@ -47,7 +47,7 @@ class AppConfig:
             vehicle_class_ids=_parse_optional_int_list(raw.get("vehicle_class_ids", [2, 3, 5, 7])),
             tracker=str(raw.get("tracker", "botsort_reid")),
             conf=float(raw.get("conf", 0.15)),
-            imgsz=int(raw.get("imgsz", 960)),
+            imgsz=int(raw.get("imgsz", 640)),
             device=_parse_optional_device(raw.get("device")),
             camera_id=int(raw.get("camera_id", 0)),
             max_queue_size=int(raw.get("max_queue_size", 1)),
