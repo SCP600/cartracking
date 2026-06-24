@@ -49,7 +49,14 @@ class PipelineWorker(threading.Thread):
         self.identity_manager = GlobalIdentityManager()
         self.scene_cut_detector = SceneCutDetector()
         self.framing = FramingController()
-        self.cropper = CropController(max_zoom=app_config.crop_max_zoom)
+        self.cropper = CropController(
+            max_zoom=app_config.crop_max_zoom,
+            max_center_speed=app_config.crop_max_center_speed,
+            max_center_acceleration=app_config.crop_max_center_acceleration,
+            max_zoom_speed=app_config.crop_max_zoom_speed,
+            lost_zoom_hold_frames=app_config.crop_lost_zoom_hold_frames,
+            lost_motion_decay=app_config.crop_lost_motion_decay,
+        )
         self._lock = threading.Lock()
         
         self._bind_request: int | None = None
@@ -198,6 +205,7 @@ class PipelineWorker(threading.Thread):
             if camera_cut:
                 self.detector.reset_tracking()
                 self.identity_manager.handle_camera_cut(self._shot_id)
+                self.cropper.reset_motion()
 
             detect_start = time.perf_counter()
             detections = self.detector.track(
@@ -330,7 +338,7 @@ class PipelineWorker(threading.Thread):
                 tracking_time_ms=tracking_time_ms,
                 reframe_time_ms=(time.perf_counter() - reframe_start) * 1000.0,
                 crop_result=crop_result,
-                lost_frames=0,
+                lost_frames=self.cropper.lost_frames,
                 candidate_count=len(detections),
                 reacquire_score=0.0,
                 recognized_vehicles=[],

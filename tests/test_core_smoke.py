@@ -227,6 +227,100 @@ class CoreSmokeTest(unittest.TestCase):
         self.assertEqual(result.frame.shape, frame.shape)
         self.assertGreaterEqual(result.zoom_ratio, 1.0)
 
+    def test_crop_zoom_is_speed_limited(self) -> None:
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        target = VehicleDetection(
+            detection_id=0,
+            local_track_id=1,
+            confidence=0.8,
+            bbox=(150, 110, 12, 8),
+            center=(156, 114),
+        )
+        cropper = CropController(max_zoom_speed=0.012)
+
+        result = cropper.crop(frame, target)
+
+        self.assertLessEqual(result.zoom_ratio, 1.004)
+
+    def test_crop_coasts_and_holds_focus_after_target_loss(self) -> None:
+        frame = np.zeros((240, 400, 3), dtype=np.uint8)
+        cropper = CropController(lost_zoom_hold_frames=20)
+
+        for _ in range(60):
+            cropper.crop(
+                frame,
+                VehicleDetection(
+                    detection_id=0,
+                    local_track_id=7,
+                    confidence=0.8,
+                    bbox=(168, 108, 24, 16),
+                    center=(180, 116),
+                ),
+            )
+
+        result = None
+        for index in range(8):
+            center_x = 180 + index * 8
+            target = VehicleDetection(
+                detection_id=index,
+                local_track_id=7,
+                confidence=0.8,
+                bbox=(center_x - 12, 108, 24, 16),
+                center=(center_x, 116),
+            )
+            result = cropper.crop(frame, target)
+
+        self.assertIsNotNone(result)
+        center_before_loss = cropper.crop_center[0]
+        zoom_before_loss = result.zoom_ratio
+
+        lost_result = cropper.crop(frame, None)
+
+        self.assertGreater(cropper.crop_center[0], center_before_loss)
+        self.assertGreaterEqual(lost_result.zoom_ratio, zoom_before_loss)
+        self.assertEqual(cropper.lost_frames, 1)
+
+    def test_crop_slowly_zooms_out_after_loss_hold(self) -> None:
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        target = VehicleDetection(
+            detection_id=0,
+            local_track_id=1,
+            confidence=0.8,
+            bbox=(150, 110, 12, 8),
+            center=(156, 114),
+        )
+        cropper = CropController(lost_zoom_hold_frames=2)
+        for _ in range(20):
+            focused_result = cropper.crop(frame, target)
+
+        cropper.crop(frame, None)
+        held_result = cropper.crop(frame, None)
+        zoom_after_hold = held_result.zoom_ratio
+        zoomed_out_result = cropper.crop(frame, None)
+
+        self.assertGreater(focused_result.zoom_ratio, 1.0)
+        self.assertGreaterEqual(zoom_after_hold, focused_result.zoom_ratio)
+        self.assertLess(zoomed_out_result.zoom_ratio, zoom_after_hold)
+        for _ in range(300):
+            zoomed_out_result = cropper.crop(frame, None)
+        self.assertAlmostEqual(zoomed_out_result.zoom_ratio, 1.0)
+
+    def test_crop_motion_reset_preserves_framing(self) -> None:
+        cropper = CropController()
+        cropper.crop_center = (180.0, 120.0)
+        cropper.zoom_ratio = 1.8
+        cropper.center_velocity = (4.0, -2.0)
+        cropper.zoom_velocity = 0.01
+        cropper.target_key = 7
+
+        cropper.reset_motion()
+
+        self.assertEqual(cropper.crop_center, (180.0, 120.0))
+        self.assertEqual(cropper.zoom_ratio, 1.8)
+        self.assertEqual(cropper.center_velocity, (0.0, 0.0))
+        self.assertEqual(cropper.zoom_velocity, 0.0)
+        self.assertIsNone(cropper.target_key)
+
     def test_screen_region_parser(self) -> None:
         controller = AppController(project_root=Path("."))
 
@@ -378,6 +472,11 @@ class CoreSmokeTest(unittest.TestCase):
                         "conf": 0.2,
                         "imgsz": 640,
                         "device": 0,
+                        "crop_max_center_speed": 0.015,
+                        "crop_max_center_acceleration": 0.002,
+                        "crop_max_zoom_speed": 0.01,
+                        "crop_lost_zoom_hold_frames": 60,
+                        "crop_lost_motion_decay": 0.9,
                     }
                 ),
                 encoding="utf-8",
@@ -392,6 +491,11 @@ class CoreSmokeTest(unittest.TestCase):
             self.assertEqual(config.conf, 0.2)
             self.assertEqual(config.imgsz, 640)
             self.assertEqual(config.device, 0)
+            self.assertEqual(config.crop_max_center_speed, 0.015)
+            self.assertEqual(config.crop_max_center_acceleration, 0.002)
+            self.assertEqual(config.crop_max_zoom_speed, 0.01)
+            self.assertEqual(config.crop_lost_zoom_hold_frames, 60)
+            self.assertEqual(config.crop_lost_motion_decay, 0.9)
 
     def test_detector_omits_class_filter_for_custom_vehicle_model(self) -> None:
         class FakeModel:
