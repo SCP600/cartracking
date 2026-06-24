@@ -19,6 +19,11 @@ class AppConfig:
     display_width: int = 640
     display_height: int = 360
     crop_max_zoom: float = 2.5
+    crop_max_center_speed: float = 0.02
+    crop_max_center_acceleration: float = 0.0025
+    crop_max_zoom_speed: float = 0.012
+    crop_lost_zoom_hold_frames: int = 45
+    crop_lost_motion_decay: float = 0.94
     gid_reid_memory_size: int = 24
     gid_reid_match_threshold: float = 0.82
     gid_reid_cross_shot_threshold: float = 0.86
@@ -49,6 +54,11 @@ class AppConfig:
             display_width=int(raw.get("display_width", 640)),
             display_height=int(raw.get("display_height", 360)),
             crop_max_zoom=float(raw.get("crop_max_zoom", 2.5)),
+            crop_max_center_speed=float(raw.get("crop_max_center_speed", 0.02)),
+            crop_max_center_acceleration=float(raw.get("crop_max_center_acceleration", 0.0025)),
+            crop_max_zoom_speed=float(raw.get("crop_max_zoom_speed", 0.012)),
+            crop_lost_zoom_hold_frames=int(raw.get("crop_lost_zoom_hold_frames", 45)),
+            crop_lost_motion_decay=float(raw.get("crop_lost_motion_decay", 0.94)),
             gid_reid_memory_size=int(raw.get("gid_reid_memory_size", 24)),
             gid_reid_match_threshold=float(raw.get("gid_reid_match_threshold", 0.82)),
             gid_reid_cross_shot_threshold=float(raw.get("gid_reid_cross_shot_threshold", 0.86)),
